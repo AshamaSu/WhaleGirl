@@ -13,6 +13,22 @@ const DEFAULT_TIMEOUT_MS = 60000;
 const DEFAULT_TEMPERATURE = 1.1;
 const DEFAULT_HOT_RELOAD = true;
 
+const MEMORY_KEYS = ['maxTurns', 'keepRecentTurns', 'factDecay', 'minStrength', 'maxFacts', 'maxPromptFacts', 'maxPromptChars'];
+
+/** 记忆参数只覆盖传进来的键，其余交给 memory.js 的默认值 */
+function pickMemorySettings(raw, warnings) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (let i = 0; i < MEMORY_KEYS.length; i += 1) {
+    const key = MEMORY_KEYS[i];
+    if (src[key] === undefined) continue;
+    const value = Number(src[key]);
+    if (Number.isFinite(value)) out[key] = value;
+    else warnings.push('memory.' + key + ' 不是数字，已忽略');
+  }
+  return out;
+}
+
 /** 模板里的占位 key，等同未填 */
 const PLACEHOLDER_KEY = /^(?:your[-_ ]?key.*|sk-xxx.*|<.*>)$/i;
 
@@ -105,7 +121,7 @@ function normalizeProvider(name, raw, env, warnings) {
     baseUrl: baseUrl.trim().replace(/\/+$/, ''),
     apiKey: apiKey,
     chatModel: chatModel.trim(),
-    visionModel: String(firstDefined(env[prefix + 'VISION_MODEL'], raw.visionModel, '')).trim(),
+    visionModel: String(firstDefined(env[prefix + 'VISION_MODEL'], raw.visionModel) || '').trim(),
     temperature: clamp(
       toNumber(firstDefined(env[prefix + 'TEMPERATURE'], raw.temperature), DEFAULT_TEMPERATURE),
       0,
@@ -182,6 +198,18 @@ function loadConfig(options) {
     active: active,
     personaPath: path.isAbsolute(personaFile) ? personaFile : path.join(root, personaFile),
     hotReload: hotReload,
+    memory: pickMemorySettings(raw.memory, warnings),
+    agent: {
+      maxRounds: toNumber(firstDefined(env.WG_MAX_ROUNDS, raw.agent && raw.agent.maxRounds), 4),
+    },
+    search: {
+      endpoint: String(firstDefined(env.WG_SEARCH_ENDPOINT, raw.search && raw.search.endpoint, 'https://api.tavily.com/search')),
+      apiKey: String(firstDefined(env.WG_TAVILY_API_KEY, raw.search && raw.search.apiKey) || ''),
+      maxResults: toNumber(firstDefined(raw.search && raw.search.maxResults), 4),
+    },
+    vision: {
+      provider: String(firstDefined(env.WG_VISION_PROVIDER, raw.vision && raw.vision.provider) || ''),
+    },
     requestTimeoutMs: toNumber(firstDefined(env.WG_TIMEOUT_MS, raw.requestTimeoutMs), DEFAULT_TIMEOUT_MS),
     providers: providers,
     warnings: warnings,
@@ -196,6 +224,30 @@ function resolveProvider(config, name) {
     throw new ConfigError('没有名为 "' + target + '" 的 provider，可用：' + available);
   }
   return provider;
+}
+
+/**
+ * 找带视觉模型的 provider：
+ * 指定的优先，其次当前 active（如果它配了 visionModel），再退到第一个配了的。
+ */
+function resolveVisionProvider(config) {
+  const wanted = config.vision && config.vision.provider;
+  if (wanted) {
+    const provider = config.providers[wanted];
+    if (!provider) throw new ConfigError('vision.provider 指向了不存在的 provider：' + wanted);
+    if (!provider.visionModel) throw new ConfigError('provider "' + wanted + '" 没配 visionModel');
+    return provider;
+  }
+
+  const active = config.providers[config.active];
+  if (active && active.visionModel) return active;
+
+  const names = Object.keys(config.providers);
+  for (let i = 0; i < names.length; i += 1) {
+    if (config.providers[names[i]].visionModel) return config.providers[names[i]];
+  }
+
+  throw new ConfigError('没有可用的视觉模型：在 config.json 里给某个 provider 填 visionModel（例如智谱 glm-4v-flash）');
 }
 
 /** 日志用，别把 key 打出去 */
@@ -213,6 +265,7 @@ module.exports = {
   ConfigError: ConfigError,
   loadConfig: loadConfig,
   resolveProvider: resolveProvider,
+  resolveVisionProvider: resolveVisionProvider,
   maskKey: maskKey,
   describeProvider: describeProvider,
   isPlaceholder: isPlaceholder,

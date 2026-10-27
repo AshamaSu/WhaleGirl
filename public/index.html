@@ -48,9 +48,14 @@
     box-shadow: 0 4px 10px rgba(47, 127, 214, 0.28);
     flex: none;
   }
-  .who { display: flex; flex-direction: column; line-height: 1.35; }
+  .who { display: flex; flex-direction: column; line-height: 1.35; flex: 1; min-width: 0; }
   .who b { font-size: 15px; letter-spacing: 0.5px; }
-  .who span { font-size: 12px; color: var(--muted); }
+  .who span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header a {
+    font-size: 12px; color: var(--sea-deep); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; flex: none;
+  }
+  header a:hover { background: #fff; }
   #chat {
     flex: 1;
     overflow-y: auto;
@@ -85,6 +90,7 @@
     color: #fff;
     border-bottom-right-radius: 6px;
   }
+  .msg.user .bubble img { display: block; max-width: 220px; border-radius: 10px; margin-bottom: 6px; }
   .bubble.error {
     background: #fff3f3;
     border-color: #f3c9c9;
@@ -100,14 +106,15 @@
     background: var(--sea);
     animation: blink 1s steps(2, start) infinite;
   }
-  .note { align-self: center; font-size: 12px; color: var(--muted); }
   form {
     display: flex;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
     padding: 12px 18px 18px;
     border-top: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.8);
   }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
   textarea {
     flex: 1;
     resize: none;
@@ -126,18 +133,34 @@
   button {
     border: 0;
     border-radius: 14px;
-    padding: 0 18px;
+    padding: 12px 18px;
     font: inherit;
     font-size: 14px;
     color: #fff;
     background: linear-gradient(180deg, #4a92dd, var(--sea));
     cursor: pointer;
     transition: opacity 0.15s, transform 0.08s;
+    flex: none;
+  }
+  button.ghost {
+    background: #fff;
+    color: var(--sea-deep);
+    border: 1px solid var(--line);
+    padding: 11px 13px;
   }
   button:active { transform: scale(0.97); }
   button:disabled { opacity: 0.45; cursor: default; }
   button.stop { background: #8aa4bb; }
   .hidden { display: none !important; }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted);
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    padding: 6px 8px; align-self: flex-start;
+  }
+  .chip img { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; }
+  .chip button { padding: 2px 7px; font-size: 12px; background: #eef4fa; color: var(--muted); }
+  #status { font-size: 12px; color: var(--muted); padding: 0 18px 8px; min-height: 16px; }
   @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   @keyframes blink { 50% { opacity: 0; } }
   @media (max-width: 560px) {
@@ -146,25 +169,37 @@
     header { padding: 10px 14px; }
     #chat { padding: 14px 14px 6px; }
     form { padding: 10px 14px 14px; }
+    #status { padding: 0 14px 6px; }
   }
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <div class="avatar">鲸</div>
+    <div class="avatar" id="avatar">鲸</div>
     <div class="who">
-      <b>小鲸</b>
+      <b id="who-name">小鲸</b>
       <span id="hint">正在连接…</span>
     </div>
+    <a href="/persona">调参</a>
   </header>
 
   <main id="chat"></main>
+  <div id="status"></div>
 
   <form id="composer" autocomplete="off">
-    <textarea id="input" rows="1" placeholder="和小鲸说点什么…"></textarea>
-    <button type="submit" id="send">发送</button>
-    <button type="button" id="stop" class="stop hidden">停止</button>
+    <div class="chip hidden" id="image-chip">
+      <img id="image-thumb" alt="待发送的图片">
+      <span id="image-name">图片</span>
+      <button type="button" id="image-remove">移除</button>
+    </div>
+    <div class="row">
+      <button type="button" class="ghost" id="image-pick" title="发一张图">图片</button>
+      <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
+      <textarea id="input" rows="1" placeholder="和小鲸说点什么…"></textarea>
+      <button type="submit" id="send">发送</button>
+      <button type="button" id="stop" class="stop hidden">停止</button>
+    </div>
   </form>
 </div>
 
@@ -178,9 +213,23 @@
   var sendBtn = document.getElementById('send');
   var stopBtn = document.getElementById('stop');
   var hintEl = document.getElementById('hint');
+  var nameEl = document.getElementById('who-name');
+  var avatarEl = document.getElementById('avatar');
+  var statusEl = document.getElementById('status');
+  var imagePick = document.getElementById('image-pick');
+  var imageInput = document.getElementById('image-input');
+  var imageChip = document.getElementById('image-chip');
+  var imageThumb = document.getElementById('image-thumb');
+  var imageRemove = document.getElementById('image-remove');
 
-  var HISTORY_LIMIT = 16;
-  var history = [];
+  var SESSION_KEY = 'whale_session';
+  var sessionId = localStorage.getItem(SESSION_KEY);
+  if (!sessionId) {
+    sessionId = 's' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem(SESSION_KEY, sessionId);
+  }
+
+  var imageData = '';
   var controller = null;
   var streaming = false;
   var maxBubbles = 3;
@@ -196,18 +245,26 @@
   function makeAvatar() {
     var el = document.createElement('div');
     el.className = 'avatar';
-    el.textContent = '鲸';
+    el.textContent = avatarEl.textContent;
     return el;
   }
 
-  function pushUser(text) {
+  function pushUser(text, image) {
     var row = document.createElement('div');
     row.className = 'msg user';
     var bubbles = document.createElement('div');
     bubbles.className = 'bubbles';
     var bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = text;
+
+    if (image) {
+      var img = document.createElement('img');
+      img.src = image;
+      img.alt = '我发的图片';
+      bubble.appendChild(img);
+    }
+    if (text) bubble.appendChild(document.createTextNode(text));
+
     bubbles.appendChild(bubble);
     row.appendChild(bubbles);
     chatEl.appendChild(row);
@@ -229,7 +286,6 @@
     scrollToBottom();
   }
 
-  /** 把回复按换行拆成多条气泡，条数不超过 maxBubbles */
   function splitBubbles(text, limit) {
     var parts = text.split('\n').map(function (line) {
       return line.trim();
@@ -244,7 +300,6 @@
     return parts;
   }
 
-  /** 去掉句尾句号和波浪号，更像随手发的消息 */
   function present(text) {
     var out = text.replace(/[。～~]+$/g, '').replace(/[～~]+/g, ' ').trim();
     return out === '' ? text : out;
@@ -283,7 +338,7 @@
     streaming = busy;
     sendBtn.disabled = busy;
     stopBtn.classList.toggle('hidden', !busy);
-    input.disabled = busy;
+    imagePick.disabled = busy;
     if (!busy) input.focus();
   }
 
@@ -292,23 +347,38 @@
     input.style.height = Math.min(input.scrollHeight, 132) + 'px';
   }
 
+  function setStatus(text) {
+    statusEl.textContent = text || '';
+  }
+
+  function setPersona(name) {
+    if (!name) return;
+    nameEl.textContent = name;
+    avatarEl.textContent = name.charAt(0);
+    document.title = name;
+  }
+
   async function chat(text) {
-    history.push({ role: 'user', content: text });
-    pushUser(text);
+    pushUser(text, imageData);
+    var sendingImage = imageData;
+    clearImage();
     setBusy(true);
+    setStatus('');
 
     controller = new AbortController();
     var group = createGroup();
     var full = '';
-    var meta = null;
     var failure = null;
     var settled = false;
+
+    var payload = { sessionId: sessionId, message: text };
+    if (sendingImage) payload.image = sendingImage;
 
     try {
       var res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: history.slice(-HISTORY_LIMIT) }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -345,10 +415,16 @@
               event = null;
             }
             if (!event) continue;
+
             if (event.type === 'meta') {
-              meta = event;
               if (event.maxBubbles) maxBubbles = event.maxBubbles;
-              hintEl.textContent = event.provider + ' · ' + event.model;
+              setPersona(event.persona);
+              var bits = [event.provider + ' · ' + event.model];
+              if (event.memory && event.memory.facts) bits.push('记得 ' + event.memory.facts + ' 件事');
+              if (event.memory && event.memory.summary) bits.push('有摘要');
+              hintEl.textContent = bits.join(' · ');
+            } else if (event.type === 'tool') {
+              setStatus('正在用 ' + event.name + (event.ok === false ? '（失败了，她会自己想办法）' : '…'));
             } else if (event.type === 'delta') {
               full += event.text;
               group.paint(full, true);
@@ -366,25 +442,56 @@
     } finally {
       controller = null;
       setBusy(false);
+      setStatus('');
     }
 
     if (full.trim() === '') group.remove();
     else group.paint(full, false);
 
-    if (full.trim() !== '') {
-      history.push({ role: 'assistant', content: full.trim() });
-      if (history.length > HISTORY_LIMIT * 2) history = history.slice(-HISTORY_LIMIT);
-    }
-
     if (failure && failure !== '已停止') pushError(failure);
-    if (!settled && failure === '已停止') hintEl.textContent = '已停止，可以接着说';
+    if (!settled && failure === '已停止') setStatus('已停止，可以接着说');
   }
+
+  function clearImage() {
+    imageData = '';
+    imageChip.classList.add('hidden');
+    imageInput.value = '';
+  }
+
+  imagePick.addEventListener('click', function () {
+    imageInput.click();
+  });
+
+  imageInput.addEventListener('change', function () {
+    var file = imageInput.files && imageInput.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setStatus('图片太大了，2MB 以内');
+      imageInput.value = '';
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      imageData = String(reader.result);
+      imageThumb.src = imageData;
+      document.getElementById('image-name').textContent = file.name + '（' + Math.round(file.size / 1024) + 'KB）';
+      imageChip.classList.remove('hidden');
+      setStatus('');
+    };
+    reader.onerror = function () {
+      setStatus('读不到这个文件');
+      imageInput.value = '';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  imageRemove.addEventListener('click', clearImage);
 
   form.addEventListener('submit', function (event) {
     event.preventDefault();
     if (streaming) return;
     var text = input.value.trim();
-    if (text === '') return;
+    if (text === '' && imageData === '') return;
     input.value = '';
     autosize();
     chat(text);
@@ -406,6 +513,7 @@
   fetch('/api/health')
     .then(function (res) { return res.json(); })
     .then(function (data) {
+      setPersona(data.personaName);
       hintEl.textContent = data.provider + ' · ' + data.model;
     })
     .catch(function () {

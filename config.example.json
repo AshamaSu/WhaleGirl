@@ -7,6 +7,25 @@
   "persona": "personas/whale.json",
   "hotReload": true,
   "requestTimeoutMs": 60000,
+  "agent": {
+    "maxRounds": 4
+  },
+  "search": {
+    "endpoint": "https://api.tavily.com/search",
+    "maxResults": 4
+  },
+  "vision": {
+    "provider": "zhipu"
+  },
+  "memory": {
+    "maxTurns": 40,
+    "keepRecentTurns": 12,
+    "factDecay": 0.97,
+    "minStrength": 0.15,
+    "maxFacts": 40,
+    "maxPromptFacts": 12,
+    "maxPromptChars": 1200
+  },
   "providers": {
     "deepseek": {
       "baseUrl": "https://api.deepseek.com/v1",

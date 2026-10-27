@@ -158,7 +158,9 @@ function normalizeHistory(history, limit) {
 function buildMessages(persona, history, options) {
   const opts = options || {};
   const limit = opts.maxHistory || DEFAULT_HISTORY_LIMIT;
-  const messages = [{ role: 'system', content: buildSystemPrompt(persona) }];
+  // 记忆块并进同一条 system 消息，避免出现两条 system
+  const systemPrompt = buildSystemPrompt(persona) + (opts.memoryText ? '\n\n' + opts.memoryText : '');
+  const messages = [{ role: 'system', content: systemPrompt }];
   for (let i = 0; i < persona.fewShots.length; i += 1) {
     messages.push({ role: 'user', content: persona.fewShots[i].user });
     messages.push({ role: 'assistant', content: persona.fewShots[i].assistant });

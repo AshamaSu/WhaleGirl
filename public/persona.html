@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>调参</title>
+<style>
+  :root { --sea: #2f7fd6; --ink: #1d2b3a; --muted: #7b8fa3; --line: #dbe7f1; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 18px 60px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, #eaf4fb 0%, #f6fbfe 45%, #e6f1f9 100%);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header a { font-size: 13px; color: var(--sea); text-decoration: none; }
+  .card {
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px 18px;
+    box-shadow: 0 4px 14px rgba(31, 95, 168, 0.06);
+  }
+  .card h2 { font-size: 14px; margin: 0 0 4px; }
+  .card p.tip { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=number], textarea {
+    width: 100%; border: 1px solid var(--line); border-radius: 10px;
+    padding: 9px 11px; font: inherit; font-size: 14px; color: var(--ink);
+    background: #fff; outline: none;
+  }
+  input:focus, textarea:focus { border-color: #a9cdec; box-shadow: 0 0 0 3px rgba(47, 127, 214, 0.12); }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5; min-height: 260px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    border: 0; border-radius: 10px; padding: 9px 16px; font: inherit; font-size: 13px;
+    color: #fff; background: linear-gradient(180deg, #4a92dd, var(--sea)); cursor: pointer;
+  }
+  button.ghost { background: #fff; color: #1f5fa8; border: 1px solid var(--line); }
+  button.danger { background: #fff; color: #a33a3a; border: 1px solid #f3c9c9; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.ok { color: #2c7a55; }
+  .status.bad { color: #a33a3a; }
+  pre {
+    background: #f7fbfe; border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px; font-size: 12px; line-height: 1.5; max-height: 320px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>调参面板</h1>
+    <a href="/">← 回到聊天</a>
+  </header>
+
+  <section class="card">
+    <h2>人设</h2>
+    <p class="tip">保存后写回人设文件。热加载开着的话，下一句就生效。</p>
+
+    <div class="grid">
+      <div>
+        <label for="f-name">名字</label>
+        <input type="text" id="f-name" placeholder="小鲸">
+      </div>
+      <div>
+        <label for="f-bubbles">每条回复最多几个气泡</label>
+        <input type="number" id="f-bubbles" min="1" max="6">
+      </div>
+      <div>
+        <label for="f-tone">语气</label>
+        <input type="text" id="f-tone" placeholder="软软的、有点懒">
+      </div>
+      <div>
+        <label for="f-length">长度</label>
+        <input type="text" id="f-length" placeholder="每次 1~2 句">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="save">保存</button>
+      <button class="ghost" id="reload">重新加载</button>
+      <span class="status" id="persona-status"></span>
+    </div>
+
+    <p class="tip" style="margin-top:16px">完整 JSON（高级：直接改 habits / fewShots / bottomLines）</p>
+    <textarea id="json" spellcheck="false"></textarea>
+  </section>
+
+  <section class="card">
+    <h2>记忆</h2>
+    <p class="tip">导出会把这份会话的原文、事实和摘要一起打出来；清空不可恢复。</p>
+    <div class="grid">
+      <div>
+        <label for="m-session">会话 ID</label>
+        <input type="text" id="m-session" placeholder="default">
+      </div>
+      <div style="display:flex; align-items:flex-end">
+        <div class="actions" style="margin:0">
+          <button class="ghost" id="m-load">导出</button>
+          <button class="danger" id="m-clear">清空</button>
+        </div>
+      </div>
+    </div>
+    <span class="status" id="memory-status"></span>
+    <pre id="memory-out" class="hidden"></pre>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var nameEl = document.getElementById('f-name');
+  var toneEl = document.getElementById('f-tone');
+  var lengthEl = document.getElementById('f-length');
+  var bubblesEl = document.getElementById('f-bubbles');
+  var jsonEl = document.getElementById('json');
+  var personaStatus = document.getElementById('persona-status');
+  var memoryStatus = document.getElementById('memory-status');
+  var memoryOut = document.getElementById('memory-out');
+  var sessionEl = document.getElementById('m-session');
+
+  var current = null;
+
+  function say(el, text, kind) {
+    el.textContent = text || '';
+    el.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function renderJson() {
+    jsonEl.value = JSON.stringify(current, null, 2);
+  }
+
+  function fillFields(persona) {
+    nameEl.value = persona.name || '';
+    toneEl.value = (persona.style && persona.style.tone) || '';
+    lengthEl.value = (persona.style && persona.style.length) || '';
+    bubblesEl.value = (persona.reply && persona.reply.maxBubbles) || 3;
+  }
+
+  function syncFromFields() {
+    if (!current) return;
+    current.name = nameEl.value.trim() || current.name;
+    if (!current.style) current.style = {};
+    current.style.tone = toneEl.value.trim();
+    current.style.length = lengthEl.value.trim();
+    if (!current.reply) current.reply = {};
+    var bubbles = parseInt(bubblesEl.value, 10);
+    current.reply.maxBubbles = Number.isFinite(bubbles) ? Math.max(1, Math.min(6, bubbles)) : 3;
+    renderJson();
+  }
+
+  function syncFromJson() {
+    var parsed = null;
+    try {
+      parsed = JSON.parse(jsonEl.value);
+    } catch (err) {
+      say(personaStatus, 'JSON 还没写完整：' + err.message, 'bad');
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      say(personaStatus, '顶层必须是一个对象', 'bad');
+      return;
+    }
+    current = parsed;
+    fillFields(current);
+    say(personaStatus, '已从 JSON 同步', '');
+  }
+
+  async function loadPersona() {
+    say(personaStatus, '读取中…');
+    try {
+      var res = await fetch('/api/persona');
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      current = data.persona;
+      fillFields(current);
+      renderJson();
+      say(personaStatus, '已加载' + (data.hotReload ? '（热加载开着，保存即生效）' : '（热加载关着，需重启）'), 'ok');
+    } catch (err) {
+      say(personaStatus, '读取失败：' + err.message, 'bad');
+    }
+  }
+
+  async function save() {
+    var parsed = null;
+    try {
+      parsed = JSON.parse(jsonEl.value);
+    } catch (err) {
+      say(personaStatus, 'JSON 不合法，没保存：' + err.message, 'bad');
+      return;
+    }
+    say(personaStatus, '保存中…');
+    try {
+      var res = await fetch('/api/persona', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      current = parsed;
+      say(personaStatus, '已保存，下一句就生效', 'ok');
+    } catch (err) {
+      say(personaStatus, '保存失败：' + err.message, 'bad');
+    }
+  }
+
+  function sessionId() {
+    var value = sessionEl.value.trim();
+    if (value) return value;
+    var stored = localStorage.getItem('whale_session');
+    return stored || 'default';
+  }
+
+  async function loadMemory() {
+    say(memoryStatus, '导出中…');
+    try {
+      var res = await fetch('/api/memory?sessionId=' + encodeURIComponent(sessionId()));
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      var mem = data.memory;
+      var text = JSON.stringify(mem, null, 2);
+      memoryOut.textContent = text;
+      memoryOut.classList.remove('hidden');
+      say(memoryStatus, '原文 ' + mem.turns.length + ' 条 · 事实 ' + mem.facts.length + ' 条 · ' +
+        (mem.summary ? '有摘要' : '无摘要'), 'ok');
+    } catch (err) {
+      say(memoryStatus, '导出失败：' + err.message, 'bad');
+    }
+  }
+
+  async function clearMemory() {
+    var id = sessionId();
+    if (!window.confirm('清空会话 ' + id + ' 的记忆？这个操作不可恢复。')) return;
+    try {
+      var res = await fetch('/api/memory?sessionId=' + encodeURIComponent(id), { method: 'DELETE' });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      memoryOut.classList.add('hidden');
+      say(memoryStatus, '已清空 ' + id, 'ok');
+    } catch (err) {
+      say(memoryStatus, '清空失败：' + err.message, 'bad');
+    }
+  }
+
+  nameEl.addEventListener('input', syncFromFields);
+  toneEl.addEventListener('input', syncFromFields);
+  lengthEl.addEventListener('input', syncFromFields);
+  bubblesEl.addEventListener('input', syncFromFields);
+  jsonEl.addEventListener('change', syncFromJson);
+
+  document.getElementById('save').addEventListener('click', save);
+  document.getElementById('reload').addEventListener('click', loadPersona);
+  document.getElementById('m-load').addEventListener('click', loadMemory);
+  document.getElementById('m-clear').addEventListener('click', clearMemory);
+
+  sessionEl.value = localStorage.getItem('whale_session') || 'default';
+
+  loadPersona();
+})();
+</script>
+</body>
+</html>
