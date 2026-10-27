@@ -9,6 +9,7 @@ const http = require('node:http');
 
 const { createServer } = require('../server');
 const { loadConfig } = require('../src/config');
+const { loadPersona } = require('../src/persona');
 
 const ROOT = path.join(__dirname, '..');
 const PERSONA = path.join(ROOT, 'personas', 'whale.json');
@@ -127,8 +128,8 @@ test('/api/chat 流式返回 meta / delta / done', async function () {
 
     const events = parseSse(await res.text());
     assert.strictEqual(events[0].type, 'meta');
-    assert.strictEqual(events[0].persona, '小鲸');
-    assert.strictEqual(events[0].maxBubbles, 3);
+    assert.strictEqual(events[0].persona, loadPersona(PERSONA).name);
+    assert.strictEqual(events[0].maxBubbles, loadPersona(PERSONA).reply.maxBubbles);
 
     const text = events.filter(function (e) { return e.type === 'delta'; })
       .map(function (e) { return e.text; }).join('');
@@ -254,7 +255,7 @@ test('静态首页可以打开，未知接口返回 JSON 404', async function ()
     const page = await fetch(app.base + '/');
     assert.strictEqual(page.status, 200);
     assert.match(page.headers.get('content-type'), /text\/html/);
-    assert.match(await page.text(), /小鲸/);
+    assert.match(await page.text(), /id="chat"/);
 
     const missing = await fetch(app.base + '/api/nope');
     assert.strictEqual(missing.status, 404);

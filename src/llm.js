@@ -13,7 +13,7 @@ class LlmError extends Error {
 }
 
 const HTTP_HINTS = {
-  400: '请求被拒绝，通常是模型名或参数不对',
+  400: '请求被拒绝，通常是模型名、参数或工具定义不对',
   401: 'API key 无效或已过期',
   402: '账户余额不足',
   403: '没有访问该模型的权限',
@@ -113,6 +113,7 @@ function extractData(block) {
   return parts.join('\n');
 }
 
+/** 单个 SSE 事件 -> { content, toolCalls, finishReason } */
 function parseChunk(data, provider) {
   let json;
   try {
@@ -126,14 +127,47 @@ function parseChunk(data, provider) {
   }
   const choice = json && json.choices && json.choices[0];
   const holder = choice && (choice.delta || choice.message);
-  const content = holder && holder.content;
   return {
-    content: typeof content === 'string' ? content : '',
+    content: holder && typeof holder.content === 'string' ? holder.content : '',
+    toolCalls: holder && Array.isArray(holder.tool_calls) ? holder.tool_calls : null,
     finishReason: (choice && choice.finish_reason) || null,
   };
 }
 
-function extractWholeContent(text, provider) {
+/**
+ * 流式返回的 tool_calls 是碎片：同一个 index 分多帧，id/name 只在第一帧，
+ * arguments 是一段段字符串拼起来的。这里按 index 归并。
+ */
+function mergeToolCalls(acc, calls) {
+  for (let i = 0; i < calls.length; i += 1) {
+    const call = calls[i] || {};
+    const index = typeof call.index === 'number' ? call.index : i;
+    const slot = acc.get(index) || { id: '', name: '', arguments: '' };
+    if (call.id) slot.id = call.id;
+    const fn = call.function || {};
+    if (fn.name) slot.name = fn.name;
+    if (typeof fn.arguments === 'string') slot.arguments += fn.arguments;
+    else if (fn.arguments && typeof fn.arguments === 'object') slot.arguments += JSON.stringify(fn.arguments);
+    acc.set(index, slot);
+  }
+}
+
+function finalizeToolCalls(acc) {
+  const out = [];
+  const entries = Array.from(acc.entries()).sort(function (a, b) { return a[0] - b[0]; });
+  for (let i = 0; i < entries.length; i += 1) {
+    const slot = entries[i][1];
+    if (!slot.name) continue;
+    out.push({
+      id: slot.id || 'call_' + entries[i][0],
+      type: 'function',
+      function: { name: slot.name, arguments: slot.arguments || '{}' },
+    });
+  }
+  return out;
+}
+
+function parseWholeBody(text, provider) {
   let json;
   try {
     json = JSON.parse(text);
@@ -146,30 +180,45 @@ function extractWholeContent(text, provider) {
     throw new LlmError(provider.name + ' 返回错误：' + msg, { code: 'stream_error' });
   }
   const choice = json && json.choices && json.choices[0];
-  const content = choice && choice.message && choice.message.content;
-  if (typeof content !== 'string' || content.trim() === '') {
-    throw new LlmError(provider.name + ' 的响应里没有 content 字段', { code: 'empty_reply' });
+  const message = (choice && choice.message) || {};
+  const content = typeof message.content === 'string' ? message.content : '';
+  const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const calls = [];
+  for (let i = 0; i < rawCalls.length; i += 1) {
+    const call = rawCalls[i] || {};
+    const fn = call.function || {};
+    if (!fn.name) continue;
+    calls.push({
+      id: call.id || 'call_' + i,
+      type: 'function',
+      function: {
+        name: fn.name,
+        arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
+      },
+    });
   }
-  return content;
+  return { content: content, toolCalls: calls, finishReason: (choice && choice.finish_reason) || null };
 }
 
 /**
- * 流式对话。async generator：每 yield 一段文本增量。
+ * 流式对话（结构化事件版）。
+ * yield: { type: 'text', text } / { type: 'tool_calls', calls } / { type: 'finish', reason }
  * 所有失败都抛 LlmError，message 是给人看的中文。
  */
-async function* streamChat(options) {
+async function* streamChatEvents(options) {
   const opts = options || {};
   const provider = opts.provider;
   const messages = opts.messages || [];
   const fetchImpl = opts.fetchImpl || globalThis.fetch;
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
   const outerSignal = opts.signal;
+  const tools = opts.tools;
 
   if (!provider) throw new LlmError('没有可用的 provider 配置', { code: 'no_provider' });
   if (!provider.apiKey) {
     throw new LlmError(
-      provider.name + ' 还没配置 API key：请编辑 config.json 的 providers.' + provider.name +
-        '.apiKey，或设置环境变量 WG_' + String(provider.name).toUpperCase() + '_API_KEY',
+      provider.name + ' 还没配置 API key：请编辑 .env 的 WG_' + String(provider.name).toUpperCase() +
+        '_API_KEY，或 config.json 的 providers.' + provider.name + '.apiKey',
       { code: 'no_api_key' }
     );
   }
@@ -184,6 +233,10 @@ async function* streamChat(options) {
   const payload = { model: provider.chatModel, messages: messages, stream: true };
   const temperature = opts.temperature === undefined ? provider.temperature : opts.temperature;
   if (typeof temperature === 'number' && Number.isFinite(temperature)) payload.temperature = temperature;
+  if (Array.isArray(tools) && tools.length > 0) {
+    payload.tools = tools;
+    payload.tool_choice = opts.toolChoice || 'auto';
+  }
 
   const controller = new AbortController();
   const abortWith = function (err) {
@@ -234,8 +287,10 @@ async function* streamChat(options) {
     const contentType = (res.headers && res.headers.get ? res.headers.get('content-type') : '') || '';
     if (contentType.indexOf('text/event-stream') === -1) {
       // 有的中转站 / 本地服务会忽略 stream:true，直接回一份完整 JSON
-      const content = extractWholeContent(await readText(res), provider);
-      yield content;
+      const parsed = parseWholeBody(await readText(res), provider);
+      if (parsed.content) yield { type: 'text', text: parsed.content };
+      if (parsed.toolCalls.length > 0) yield { type: 'tool_calls', calls: parsed.toolCalls };
+      yield { type: 'finish', reason: parsed.finishReason || (parsed.toolCalls.length > 0 ? 'tool_calls' : 'stop') };
       return;
     }
 
@@ -247,7 +302,11 @@ async function* streamChat(options) {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let produced = false;
+    let finishReason = null;
+    let sawDone = false;
+    const toolAcc = new Map();
 
+    readLoop:
     for (;;) {
       const step = await reader.read();
       if (step.done) break;
@@ -257,18 +316,18 @@ async function* streamChat(options) {
       while (index !== -1) {
         const data = extractData(buffer.slice(0, index));
         buffer = buffer.slice(index + 2);
+
         if (data !== null) {
           if (data === '[DONE]') {
-            // 直接收到 [DONE] 却一个字都没产出，多半是模型名或额度有问题
-            if (!produced) {
-              throw new LlmError(provider.name + ' 连上了但一个字都没返回，检查模型名和账户额度', { code: 'empty_reply' });
-            }
-            return;
+            sawDone = true;
+            break readLoop;
           }
           const chunk = parseChunk(data, provider);
+          if (chunk.finishReason) finishReason = chunk.finishReason;
+          if (chunk.toolCalls) mergeToolCalls(toolAcc, chunk.toolCalls);
           if (chunk.content) {
             produced = true;
-            yield chunk.content;
+            yield { type: 'text', text: chunk.content };
           }
         }
         index = buffer.indexOf('\n\n');
@@ -276,18 +335,25 @@ async function* streamChat(options) {
     }
 
     // 收尾：最后一段可能没有以空行结束
-    const tail = extractData(buffer);
-    if (tail !== null && tail !== '[DONE]') {
-      const chunk = parseChunk(tail, provider);
-      if (chunk.content) {
-        produced = true;
-        yield chunk.content;
+    if (!sawDone && buffer.trim() !== '') {
+      const tail = extractData(buffer);
+      if (tail !== null && tail !== '[DONE]') {
+        const chunk = parseChunk(tail, provider);
+        if (chunk.finishReason) finishReason = chunk.finishReason;
+        if (chunk.toolCalls) mergeToolCalls(toolAcc, chunk.toolCalls);
+        if (chunk.content) {
+          produced = true;
+          yield { type: 'text', text: chunk.content };
+        }
       }
     }
 
-    if (!produced) {
+    const calls = finalizeToolCalls(toolAcc);
+    if (!produced && calls.length === 0) {
       throw new LlmError(provider.name + ' 连上了但一个字都没返回，检查模型名和账户额度', { code: 'empty_reply' });
     }
+    if (calls.length > 0) yield { type: 'tool_calls', calls: calls };
+    yield { type: 'finish', reason: finishReason || (calls.length > 0 ? 'tool_calls' : 'stop') };
   } catch (err) {
     throw mapFetchError(err, provider, timeoutMs);
   } finally {
@@ -302,10 +368,21 @@ async function* streamChat(options) {
   }
 }
 
+/** 只要纯文本的便捷版本（P0 的调用方与测试用这个） */
+async function* streamChat(options) {
+  const events = streamChatEvents(options);
+  for await (const event of events) {
+    if (event.type === 'text') yield event.text;
+  }
+}
+
 module.exports = {
   LlmError: LlmError,
   streamChat: streamChat,
+  streamChatEvents: streamChatEvents,
   extractData: extractData,
   parseChunk: parseChunk,
+  mergeToolCalls: mergeToolCalls,
+  finalizeToolCalls: finalizeToolCalls,
   DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
 };

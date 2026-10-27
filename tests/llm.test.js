@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { streamChat, LlmError, extractData } = require('../src/llm');
+const { streamChat, streamChatEvents, LlmError, extractData } = require('../src/llm');
 
 const PROVIDER = {
   name: 'deepseek',
@@ -324,3 +324,133 @@ test('extractData 只取 data: 行并支持多行拼接', function () {
   assert.strictEqual(extractData(': ping'), null);
 });
 
+
+function frame(obj) {
+  return 'data: ' + JSON.stringify(obj) + '\n\n';
+}
+
+async function collectEvents(options) {
+  const events = [];
+  for await (const event of streamChatEvents(options)) events.push(event);
+  return events;
+}
+
+test('流式 tool_calls 分片按 index 归并成完整调用', async function () {
+  const pieces = [
+    frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'web_search', arguments: '' } }] } }] }),
+    frame({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"query":' } }] } }] }),
+    frame({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"鲸鱼 新闻"}' } }] } }] }),
+    frame({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+    DONE,
+  ];
+
+  const events = await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    fetchImpl: async function () { return sseResponse(pieces); },
+  });
+
+  const callEvent = events.filter(function (e) { return e.type === 'tool_calls'; })[0];
+  assert.ok(callEvent);
+  assert.strictEqual(callEvent.calls.length, 1);
+  assert.strictEqual(callEvent.calls[0].id, 'call_1');
+  assert.strictEqual(callEvent.calls[0].type, 'function');
+  assert.strictEqual(callEvent.calls[0].function.name, 'web_search');
+  assert.deepStrictEqual(JSON.parse(callEvent.calls[0].function.arguments), { query: '鲸鱼 新闻' });
+  assert.strictEqual(events[events.length - 1].type, 'finish');
+  assert.strictEqual(events[events.length - 1].reason, 'tool_calls');
+});
+
+test('多个 tool_calls 各自归并，缺 id 时补一个', async function () {
+  const pieces = [
+    frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'web_search', arguments: '{}' } }, { index: 1, function: { name: 'fetch_url', arguments: '{"url":' } }] } }] }),
+    frame({ choices: [{ delta: { tool_calls: [{ index: 1, function: { arguments: '"https://x.test"}' } }] } }] }),
+    frame({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+    DONE,
+  ];
+
+  const events = await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    fetchImpl: async function () { return sseResponse(pieces); },
+  });
+
+  const calls = events.filter(function (e) { return e.type === 'tool_calls'; })[0].calls;
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[0].function.name, 'web_search');
+  assert.strictEqual(calls[1].function.name, 'fetch_url');
+  assert.strictEqual(calls[1].id, 'call_1');
+  assert.deepStrictEqual(JSON.parse(calls[1].function.arguments), { url: 'https://x.test' });
+});
+
+test('只有 tool_calls 没有文本时不算空回复', async function () {
+  const events = await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    fetchImpl: async function () {
+      return sseResponse([
+        frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'x', function: { name: 'remember', arguments: '{"fact":"他叫阿龙"}' } }] } }] }),
+        DONE,
+      ]);
+    },
+  });
+
+  assert.strictEqual(events.filter(function (e) { return e.type === 'text'; }).length, 0);
+  assert.strictEqual(events.filter(function (e) { return e.type === 'tool_calls'; })[0].calls[0].function.name, 'remember');
+});
+
+test('非 SSE 的 JSON 响应也支持 tool_calls', async function () {
+  const events = await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    fetchImpl: async function () {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: function () { return 'application/json'; } },
+        text: async function () {
+          return JSON.stringify({
+            choices: [{
+              message: {
+                content: '',
+                tool_calls: [{ id: 'c1', function: { name: 'web_search', arguments: '{"query":"x"}' } }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          });
+        },
+      };
+    },
+  });
+
+  const callEvent = events.filter(function (e) { return e.type === 'tool_calls'; })[0];
+  assert.strictEqual(callEvent.calls[0].function.name, 'web_search');
+  assert.strictEqual(events[events.length - 1].reason, 'tool_calls');
+});
+
+test('传了 tools 才带 tools 字段，且 tool_choice 默认 auto', async function () {
+  let body = null;
+  const schema = [{ type: 'function', function: { name: 'web_search', description: 'x', parameters: { type: 'object', properties: {} } } }];
+
+  await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    tools: schema,
+    fetchImpl: async function (url, init) {
+      body = JSON.parse(init.body);
+      return sseResponse([delta('ok'), DONE]);
+    },
+  });
+  assert.deepStrictEqual(body.tools, schema);
+  assert.strictEqual(body.tool_choice, 'auto');
+
+  await collectEvents({
+    provider: PROVIDER,
+    messages: MESSAGES,
+    fetchImpl: async function (url, init) {
+      body = JSON.parse(init.body);
+      return sseResponse([delta('ok'), DONE]);
+    },
+  });
+  assert.strictEqual(body.tools, undefined);
+});

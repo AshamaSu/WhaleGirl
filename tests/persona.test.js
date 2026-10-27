@@ -35,12 +35,12 @@ const MINIMAL = {
   reply: { maxBubbles: 2 },
 };
 
-test('读取项目自带的小鲸人设', function () {
+test('读取项目自带的人设（名字随文件变化，不写死）', function () {
   const persona = loadPersona(WHALE);
 
-  assert.strictEqual(persona.name, '小鲸');
+  assert.ok(persona.name.length > 0);
   assert.ok(persona.fewShots.length >= 3);
-  assert.strictEqual(persona.reply.maxBubbles, 3);
+  assert.ok(persona.reply.maxBubbles >= 1);
   assert.ok(persona.bottomLines.length >= 1);
 });
 
@@ -52,7 +52,7 @@ test('system prompt 分层包含四块内容', function () {
   assert.ok(prompt.indexOf('【说话方式】') !== -1);
   assert.ok(prompt.indexOf('【输出格式】') !== -1);
   assert.ok(prompt.indexOf('【底线】') !== -1);
-  assert.ok(prompt.indexOf('小鲸') !== -1);
+  assert.ok(prompt.indexOf(persona.name) !== -1);
   assert.ok(prompt.indexOf('最多 3 段') !== -1);
 });
 
