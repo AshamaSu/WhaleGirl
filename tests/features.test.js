@@ -188,7 +188,7 @@ test('stopAll 把所有在跑的能力都停掉', function () {
   assert.deepStrictEqual(host.running(), []);
 });
 
-test('默认注册表里只有 P2c 已经实现的能力', function () {
+test('默认注册表里只有已经实现的能力', function () {
   const names = defaultModules().map(function (module) { return module.name; });
-  assert.deepStrictEqual(names, ['mood', 'memory']);
+  assert.deepStrictEqual(names, ['mood', 'memory', 'bili']);
 });

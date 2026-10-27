@@ -183,6 +183,7 @@ test('能力关着时 /memory 与时间线接口都不存在，health 里如实�
     assert.deepStrictEqual(health.features, {
       mood: { enabled: false, error: '' },
       memory: { enabled: false, error: '' },
+      bili: { enabled: false, error: '' },
     });
   } finally {
     await app.close();

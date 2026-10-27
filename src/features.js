@@ -3,10 +3,11 @@
 const { isEnabled } = require('./features/settings');
 const { createMoodModule } = require('./features/mood');
 const { createMemoryTimelineModule } = require('./features/memory-timeline');
+const { createBiliModule } = require('./features/bili');
 
 /** 注册表：加新能力只改这里一行 */
 function defaultModules() {
-  return [createMoodModule(), createMemoryTimelineModule()];
+  return [createMoodModule(), createMemoryTimelineModule(), createBiliModule()];
 }
 
 function message(err) {

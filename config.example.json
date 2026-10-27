@@ -29,10 +29,17 @@
     },
     "bili": {
       "enabled": false,
-      "intervalMinutes": 120,
-      "targetUPs": [],
-      "pushTargets": [],
-      "allowWithoutSubtitle": true
+      "owner": "主人",
+      "intervalMinutes": 180,
+      "dailyQuota": 4,
+      "activeWindows": ["12:00-14:00", "18:00-09:00"],
+      "weekendAllDay": true,
+      "keywords": [],
+      "itemsPerRound": 3,
+      "minPlays": 5000,
+      "maxDaysOld": 14,
+      "maxRounds": 8,
+      "announce": true
     },
     "qq": {
       "enabled": false,
