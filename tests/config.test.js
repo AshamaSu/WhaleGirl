@@ -183,3 +183,24 @@ test('resolveProvider 找不到时列出可用项', function () {
   }, /可用：deepseek/);
 });
 
+
+test('hotReload 默认开，配置文件可以关，环境变量可以覆盖', function () {
+  const root = tmpRoot();
+  writeConfig(root, 'config.json', baseRaw());
+  assert.strictEqual(loadConfig({ root: root, env: {} }).hotReload, true);
+
+  writeConfig(root, 'config.json', baseRaw({ hotReload: false }));
+  assert.strictEqual(loadConfig({ root: root, env: {} }).hotReload, false);
+
+  assert.strictEqual(loadConfig({ root: root, env: { WG_HOT_RELOAD: '1' } }).hotReload, true);
+  assert.strictEqual(loadConfig({ root: root, env: { WG_HOT_RELOAD: '0' } }).hotReload, false);
+});
+
+test('hotReload 写了看不懂的值时按默认处理并告警', function () {
+  const root = tmpRoot();
+  writeConfig(root, 'config.json', baseRaw({ hotReload: '也许' }));
+
+  const config = loadConfig({ root: root, env: {} });
+  assert.strictEqual(config.hotReload, true);
+  assert.ok(config.warnings.some(function (w) { return w.indexOf('hotReload') !== -1; }));
+});

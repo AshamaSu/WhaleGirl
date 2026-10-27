@@ -11,6 +11,7 @@ const {
 } = require('./src/config');
 const { loadPersona, buildMessages } = require('./src/persona');
 const { streamChat } = require('./src/llm');
+const { loadEnvFile, withProcessEnv } = require('./src/env');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_MESSAGES = 40;
@@ -166,6 +167,27 @@ function createServer(config, deps) {
   const chatStream = options.streamChat || streamChat;
   const logger = options.logger || console;
   const configLoader = options.loadConfig || loadConfig;
+  const personaLoader = options.loadPersona || loadPersona;
+  const envLoader = options.loadEnvFile || loadEnvFile;
+
+  // 热加载开关本身只在启动时读一次：关掉之后配置就不会再变，改了得重启
+  const hotReload = config.hotReload !== false;
+  let cached = null;
+
+  /** 按开关决定"每次现读"还是"用启动时缓存" */
+  function resolveLive() {
+    if (!hotReload && cached) return cached;
+
+    const env = withProcessEnv(envLoader(root));
+    const liveConfig = configLoader({ root: root, env: env });
+    const resolved = {
+      config: liveConfig,
+      provider: resolveProvider(liveConfig, liveConfig.active),
+      persona: personaLoader(liveConfig.personaPath),
+    };
+    if (!hotReload) cached = resolved;
+    return resolved;
+  }
 
   async function handleChat(req, res) {
     if (req.method !== 'POST') {
@@ -199,10 +221,11 @@ function createServer(config, deps) {
     let text = '';
 
     try {
-      // 每次请求重新读配置与人设：改 config.json / whale.json 都不用重启
-      const liveConfig = configLoader({ root: root });
-      const provider = resolveProvider(liveConfig, liveConfig.active);
-      const persona = loadPersona(liveConfig.personaPath);
+      // 热加载开着就每次现读 .env / config.json / 人设，关着就用启动时的缓存
+      const live = resolveLive();
+      const liveConfig = live.config;
+      const provider = live.provider;
+      const persona = live.persona;
 
       send({
         type: 'meta',
@@ -251,12 +274,18 @@ function createServer(config, deps) {
     }
 
     if (pathname === '/api/health') {
-      const provider = config.providers[config.active];
+      let live;
+      try {
+        live = resolveLive();
+      } catch (err) {
+        live = { config: config, provider: config.providers[config.active], persona: null };
+      }
       sendJson(res, 200, {
         ok: true,
-        provider: provider.name,
-        model: provider.chatModel,
-        persona: config.personaPath,
+        provider: live.provider.name,
+        model: live.provider.chatModel,
+        persona: live.config.personaPath,
+        hotReload: hotReload,
       });
       return;
     }
@@ -295,9 +324,11 @@ function createServer(config, deps) {
 }
 
 function main() {
+  let fileEnv;
   let config;
   try {
-    config = loadConfig({ root: __dirname });
+    fileEnv = loadEnvFile(__dirname);
+    config = loadConfig({ root: __dirname, env: withProcessEnv(fileEnv) });
   } catch (err) {
     console.error('启动失败：' + err.message);
     process.exit(1);
@@ -321,6 +352,11 @@ function main() {
     const provider = config.providers[config.active];
     console.log('小鲸已启动 → http://' + config.host + ':' + config.port);
     console.log('  配置：' + config.source + ' · ' + describeProvider(provider));
+    const envCount = Object.keys(fileEnv || {}).length;
+    console.log('  .env：' + (envCount > 0 ? '已加载 ' + envCount + ' 项（进程环境优先）' : '没找到，只用 config.json'));
+    console.log('  热加载：' + (config.hotReload
+      ? '开（改 .env / config.json / 人设，下一句就生效）'
+      : '关（改完需要重启）'));
     if (!provider.apiKey) {
       console.warn('  警告：' + provider.name + ' 还没填 API key，发消息会直接报错（改 config.json 后不必重启）');
     }

@@ -11,11 +11,13 @@
 
 ## 配置
 
-1. `cp config.example.json config.json`（`config.json` 已在 .gitignore 里，不会被提交）
-2. 填 `providers.deepseek.apiKey`（或 zhipu / custom）
-3. `active` 决定用哪个 provider，改完保存，**不用重启**
+密钥走环境变量，非密钥项走 config.json：
 
-优先级：环境变量 `WG_*` > `config.json` > `config.example.json`。
+1. `cp .env.example .env`，填 `WG_DEEPSEEK_API_KEY=sk-...`（`.env` 权限 600，不进 git）
+2. `cp config.example.json config.json`，里面不要再写 key（留空即可）
+3. `.env` 的 `WG_ACTIVE` 或 config.json 的 `active` 决定用哪个 provider
+
+优先级：进程环境变量 `WG_*` > `.env` > `config.json` > `config.example.json`。
 
 | 环境变量 | 作用 |
 |---|---|
@@ -24,6 +26,16 @@
 | `WG_PERSONA` | 人设文件路径 |
 | `WG_<PROVIDER>_API_KEY` | provider 的 key，如 `WG_DEEPSEEK_API_KEY` |
 | `WG_<PROVIDER>_BASE_URL` / `_CHAT_MODEL` | 覆盖地址与模型名 |
+| `WG_HOT_RELOAD` | 1 开 / 0 关，热加载 `.env` + config.json + 人设 |
+
+### 热加载开关
+
+config.json 里的 `"hotReload": true`（或 `WG_HOT_RELOAD=1`）控制是否每次请求重新读 .env / config.json / 人设：
+
+- **开（默认）**：改完保存，下一句就生效，不用重启
+- **关**：启动时读一次并缓存，改配置需要重启
+
+开关本身只在启动时读一次——想从"关"切回"开"，得改完重启。
 
 ## 目录
 

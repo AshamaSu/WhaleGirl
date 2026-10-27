@@ -334,3 +334,40 @@ test('配置读取失败时通过 SSE 报错而不是静默挂掉', async functi
   }
 });
 
+
+test('hotReload 关掉后改 config.json 不再生效', async function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-nohot-'));
+  const configFile = path.join(root, 'config.json');
+
+  function write(active) {
+    fs.writeFileSync(configFile, JSON.stringify({
+      active: active,
+      hotReload: false,
+      persona: PERSONA,
+      providers: {
+        deepseek: { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'k1', chatModel: 'deepseek-chat' },
+        zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKey: 'k2', chatModel: 'glm-4-flash' },
+      },
+    }));
+  }
+
+  write('zhipu');
+  const app = await start(baseConfig({ root: root, hotReload: false }), {
+    root: root,
+    streamChat: fakeStream(['嗯']),
+    loadConfig: function () {
+      return loadConfig({ root: root, env: {} });
+    },
+  });
+
+  try {
+    const first = parseSse(await (await postChat(app.base, { messages: [{ role: 'user', content: '嗨' }] })).text());
+    assert.strictEqual(first[0].provider, 'zhipu');
+
+    write('deepseek');
+    const second = parseSse(await (await postChat(app.base, { messages: [{ role: 'user', content: '嗨' }] })).text());
+    assert.strictEqual(second[0].provider, 'zhipu');
+  } finally {
+    await app.close();
+  }
+});

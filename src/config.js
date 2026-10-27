@@ -11,6 +11,7 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_PERSONA = 'personas/whale.json';
 const DEFAULT_TIMEOUT_MS = 60000;
 const DEFAULT_TEMPERATURE = 1.1;
+const DEFAULT_HOT_RELOAD = true;
 
 /** 模板里的占位 key，等同未填 */
 const PLACEHOLDER_KEY = /^(?:your[-_ ]?key.*|sk-xxx.*|<.*>)$/i;
@@ -57,6 +58,14 @@ function toNumber(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function toBool(value, fallback) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (text === '1' || text === 'true' || text === 'on' || text === 'yes') return true;
+  if (text === '0' || text === 'false' || text === 'off' || text === 'no') return false;
+  return fallback;
 }
 
 function isPlaceholder(value) {
@@ -158,6 +167,13 @@ function loadConfig(options) {
 
   const personaFile = String(firstDefined(env.WG_PERSONA, raw.persona, DEFAULT_PERSONA));
 
+  const hotReloadRaw = firstDefined(env.WG_HOT_RELOAD, raw.hotReload);
+  const hotReloadParsed = toBool(hotReloadRaw, null);
+  const hotReload = hotReloadParsed === null ? DEFAULT_HOT_RELOAD : hotReloadParsed;
+  if (hotReloadRaw !== undefined && hotReloadParsed === null) {
+    warnings.push('hotReload 的值 "' + hotReloadRaw + '" 看不懂，已按默认（' + DEFAULT_HOT_RELOAD + '）处理');
+  }
+
   return {
     root: root,
     source: source,
@@ -165,6 +181,7 @@ function loadConfig(options) {
     port: port,
     active: active,
     personaPath: path.isAbsolute(personaFile) ? personaFile : path.join(root, personaFile),
+    hotReload: hotReload,
     requestTimeoutMs: toNumber(firstDefined(env.WG_TIMEOUT_MS, raw.requestTimeoutMs), DEFAULT_TIMEOUT_MS),
     providers: providers,
     warnings: warnings,
@@ -199,6 +216,7 @@ module.exports = {
   maskKey: maskKey,
   describeProvider: describeProvider,
   isPlaceholder: isPlaceholder,
+  toBool: toBool,
   CONFIG_FILE: CONFIG_FILE,
   EXAMPLE_FILE: EXAMPLE_FILE,
 };

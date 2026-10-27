@@ -5,6 +5,7 @@
   },
   "active": "deepseek",
   "persona": "personas/whale.json",
+  "hotReload": true,
   "requestTimeoutMs": 60000,
   "providers": {
     "deepseek": {
