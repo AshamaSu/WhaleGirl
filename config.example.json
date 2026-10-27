@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "active": "deepseek",
+  "persona": "personas/whale.json",
+  "requestTimeoutMs": 60000,
+  "providers": {
+    "deepseek": {
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "",
+      "chatModel": "deepseek-chat",
+      "visionModel": "",
+      "temperature": 1.1
+    },
+    "zhipu": {
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "apiKey": "",
+      "chatModel": "glm-4-flash",
+      "visionModel": "glm-4v-flash",
+      "temperature": 1.0
+    },
+    "custom": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "chatModel": "qwen2.5:7b",
+      "visionModel": "",
+      "temperature": 1.0
+    }
+  }
+}

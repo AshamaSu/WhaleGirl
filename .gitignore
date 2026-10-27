@@ -1,0 +1,11 @@
+# —— 永不入库 ——
+config.json
+data/
+logs/
+*.log
+.env
+
+# 运行时产物
+node_modules/
+.DS_Store
+.workbuddy/

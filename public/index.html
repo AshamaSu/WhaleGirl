@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>小鲸</title>
+<style>
+  :root {
+    --sea: #2f7fd6;
+    --sea-deep: #1f5fa8;
+    --ink: #1d2b3a;
+    --muted: #7b8fa3;
+    --line: #dbe7f1;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, #eaf4fb 0%, #f6fbfe 45%, #e6f1f9 100%);
+    display: flex;
+    justify-content: center;
+  }
+  .app {
+    width: 100%;
+    max-width: 760px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(6px);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.75);
+  }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center;
+    color: #fff; font-size: 18px; font-weight: 600;
+    background: radial-gradient(circle at 32% 28%, #7fc0f0, var(--sea) 62%, var(--sea-deep));
+    box-shadow: 0 4px 10px rgba(47, 127, 214, 0.28);
+    flex: none;
+  }
+  .who { display: flex; flex-direction: column; line-height: 1.35; }
+  .who b { font-size: 15px; letter-spacing: 0.5px; }
+  .who span { font-size: 12px; color: var(--muted); }
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 18px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scroll-behavior: smooth;
+  }
+  .msg { display: flex; gap: 8px; align-items: flex-end; }
+  .msg.user { flex-direction: row-reverse; }
+  .msg .avatar { width: 30px; height: 30px; font-size: 13px; }
+  .bubbles { display: flex; flex-direction: column; gap: 6px; max-width: 76%; }
+  .msg.user .bubbles { align-items: flex-end; }
+  .bubble {
+    padding: 9px 13px;
+    border-radius: 16px;
+    font-size: 15px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    animation: pop 0.16s ease-out;
+  }
+  .msg.assistant .bubble {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-bottom-left-radius: 6px;
+    box-shadow: 0 2px 8px rgba(31, 95, 168, 0.06);
+  }
+  .msg.user .bubble {
+    background: linear-gradient(180deg, #4a92dd, var(--sea));
+    color: #fff;
+    border-bottom-right-radius: 6px;
+  }
+  .bubble.error {
+    background: #fff3f3;
+    border-color: #f3c9c9;
+    color: #a33a3a;
+    font-size: 13px;
+  }
+  .bubble.typing::after {
+    content: "";
+    display: inline-block;
+    width: 2px; height: 1em;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    background: var(--sea);
+    animation: blink 1s steps(2, start) infinite;
+  }
+  .note { align-self: center; font-size: 12px; color: var(--muted); }
+  form {
+    display: flex;
+    gap: 10px;
+    padding: 12px 18px 18px;
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.8);
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 11px 13px;
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    max-height: 132px;
+    color: var(--ink);
+    background: #fff;
+    outline: none;
+  }
+  textarea:focus { border-color: #a9cdec; box-shadow: 0 0 0 3px rgba(47, 127, 214, 0.12); }
+  button {
+    border: 0;
+    border-radius: 14px;
+    padding: 0 18px;
+    font: inherit;
+    font-size: 14px;
+    color: #fff;
+    background: linear-gradient(180deg, #4a92dd, var(--sea));
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.08s;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.stop { background: #8aa4bb; }
+  .hidden { display: none !important; }
+  @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (max-width: 560px) {
+    .app { border: 0; }
+    .bubbles { max-width: 84%; }
+    header { padding: 10px 14px; }
+    #chat { padding: 14px 14px 6px; }
+    form { padding: 10px 14px 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="avatar">鲸</div>
+    <div class="who">
+      <b>小鲸</b>
+      <span id="hint">正在连接…</span>
+    </div>
+  </header>
+
+  <main id="chat"></main>
+
+  <form id="composer" autocomplete="off">
+    <textarea id="input" rows="1" placeholder="和小鲸说点什么…"></textarea>
+    <button type="submit" id="send">发送</button>
+    <button type="button" id="stop" class="stop hidden">停止</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var chatEl = document.getElementById('chat');
+  var form = document.getElementById('composer');
+  var input = document.getElementById('input');
+  var sendBtn = document.getElementById('send');
+  var stopBtn = document.getElementById('stop');
+  var hintEl = document.getElementById('hint');
+
+  var HISTORY_LIMIT = 16;
+  var history = [];
+  var controller = null;
+  var streaming = false;
+  var maxBubbles = 3;
+
+  function nearBottom() {
+    return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
+  }
+
+  function scrollToBottom() {
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  function makeAvatar() {
+    var el = document.createElement('div');
+    el.className = 'avatar';
+    el.textContent = '鲸';
+    return el;
+  }
+
+  function pushUser(text) {
+    var row = document.createElement('div');
+    row.className = 'msg user';
+    var bubbles = document.createElement('div');
+    bubbles.className = 'bubbles';
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    bubbles.appendChild(bubble);
+    row.appendChild(bubbles);
+    chatEl.appendChild(row);
+    scrollToBottom();
+  }
+
+  function pushError(text) {
+    var row = document.createElement('div');
+    row.className = 'msg assistant';
+    var bubbles = document.createElement('div');
+    bubbles.className = 'bubbles';
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble error';
+    bubble.textContent = text;
+    bubbles.appendChild(bubble);
+    row.appendChild(makeAvatar());
+    row.appendChild(bubbles);
+    chatEl.appendChild(row);
+    scrollToBottom();
+  }
+
+  /** 把回复按换行拆成多条气泡，条数不超过 maxBubbles */
+  function splitBubbles(text, limit) {
+    var parts = text.split('\n').map(function (line) {
+      return line.trim();
+    }).filter(function (line) {
+      return line !== '';
+    });
+    if (parts.length > limit) {
+      var head = parts.slice(0, limit - 1);
+      head.push(parts.slice(limit - 1).join(' '));
+      parts = head;
+    }
+    return parts;
+  }
+
+  /** 去掉句尾句号和波浪号，更像随手发的消息 */
+  function present(text) {
+    var out = text.replace(/[。～~]+$/g, '').replace(/[～~]+/g, ' ').trim();
+    return out === '' ? text : out;
+  }
+
+  function createGroup() {
+    var row = document.createElement('div');
+    row.className = 'msg assistant';
+    var bubbles = document.createElement('div');
+    bubbles.className = 'bubbles';
+    row.appendChild(makeAvatar());
+    row.appendChild(bubbles);
+    chatEl.appendChild(row);
+
+    return {
+      paint: function (text, typing) {
+        var stick = nearBottom();
+        var parts = splitBubbles(text, maxBubbles);
+        bubbles.innerHTML = '';
+        for (var i = 0; i < parts.length; i += 1) {
+          var bubble = document.createElement('div');
+          bubble.className = 'bubble';
+          bubble.textContent = present(parts[i]);
+          if (typing && i === parts.length - 1) bubble.className += ' typing';
+          bubbles.appendChild(bubble);
+        }
+        if (stick) scrollToBottom();
+      },
+      remove: function () {
+        row.remove();
+      },
+    };
+  }
+
+  function setBusy(busy) {
+    streaming = busy;
+    sendBtn.disabled = busy;
+    stopBtn.classList.toggle('hidden', !busy);
+    input.disabled = busy;
+    if (!busy) input.focus();
+  }
+
+  function autosize() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 132) + 'px';
+  }
+
+  async function chat(text) {
+    history.push({ role: 'user', content: text });
+    pushUser(text);
+    setBusy(true);
+
+    controller = new AbortController();
+    var group = createGroup();
+    var full = '';
+    var meta = null;
+    var failure = null;
+    var settled = false;
+
+    try {
+      var res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: history.slice(-HISTORY_LIMIT) }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        var detail = null;
+        try {
+          detail = await res.json();
+        } catch (ignore) {
+          detail = null;
+        }
+        throw new Error((detail && detail.error) || ('服务返回 ' + res.status));
+      }
+
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      var buffer = '';
+
+      for (;;) {
+        var step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+
+        var index = buffer.indexOf('\n\n');
+        while (index !== -1) {
+          var block = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          var lines = block.split('\n');
+          for (var i = 0; i < lines.length; i += 1) {
+            if (lines[i].indexOf('data:') !== 0) continue;
+            var event = null;
+            try {
+              event = JSON.parse(lines[i].slice(5).trim());
+            } catch (ignore) {
+              event = null;
+            }
+            if (!event) continue;
+            if (event.type === 'meta') {
+              meta = event;
+              if (event.maxBubbles) maxBubbles = event.maxBubbles;
+              hintEl.textContent = event.provider + ' · ' + event.model;
+            } else if (event.type === 'delta') {
+              full += event.text;
+              group.paint(full, true);
+            } else if (event.type === 'error') {
+              failure = event.message || '出错了';
+              if (event.partial) full = event.partial;
+            }
+          }
+          index = buffer.indexOf('\n\n');
+        }
+      }
+      settled = true;
+    } catch (err) {
+      failure = err && err.name === 'AbortError' ? '已停止' : (err && err.message) || String(err);
+    } finally {
+      controller = null;
+      setBusy(false);
+    }
+
+    if (full.trim() === '') group.remove();
+    else group.paint(full, false);
+
+    if (full.trim() !== '') {
+      history.push({ role: 'assistant', content: full.trim() });
+      if (history.length > HISTORY_LIMIT * 2) history = history.slice(-HISTORY_LIMIT);
+    }
+
+    if (failure && failure !== '已停止') pushError(failure);
+    if (!settled && failure === '已停止') hintEl.textContent = '已停止，可以接着说';
+  }
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (streaming) return;
+    var text = input.value.trim();
+    if (text === '') return;
+    input.value = '';
+    autosize();
+    chat(text);
+  });
+
+  input.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  input.addEventListener('input', autosize);
+
+  stopBtn.addEventListener('click', function () {
+    if (controller) controller.abort();
+  });
+
+  fetch('/api/health')
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      hintEl.textContent = data.provider + ' · ' + data.model;
+    })
+    .catch(function () {
+      hintEl.textContent = '连不上服务，确认 node server.js 还在跑';
+    });
+
+  input.focus();
+})();
+</script>
+</body>
+</html>

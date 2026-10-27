@@ -1,0 +1,311 @@
+'use strict';
+
+const DEFAULT_TIMEOUT_MS = 60000;
+
+class LlmError extends Error {
+  constructor(message, extra) {
+    super(message);
+    this.name = 'LlmError';
+    const info = extra || {};
+    this.status = info.status;
+    this.code = info.code;
+  }
+}
+
+const HTTP_HINTS = {
+  400: '请求被拒绝，通常是模型名或参数不对',
+  401: 'API key 无效或已过期',
+  402: '账户余额不足',
+  403: '没有访问该模型的权限',
+  404: '接口路径不存在',
+  422: '参数不合法',
+  429: '请求太频繁或额度用完了',
+};
+
+function trimBaseUrl(url) {
+  return String(url || '').replace(/\/+$/, '');
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch (err) {
+    return String(url);
+  }
+}
+
+function messageOf(body) {
+  const text = String(body == null ? '' : body);
+  try {
+    const data = JSON.parse(text);
+    const err = data && data.error;
+    const msg = (err && (err.message || err.code)) || (data && (data.message || data.msg));
+    if (msg) return String(msg).slice(0, 300);
+  } catch (err) {
+    // 不是 JSON 就走纯文本兜底
+  }
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat ? flat.slice(0, 300) : '';
+}
+
+function mapHttpError(status, body, provider) {
+  let hint = HTTP_HINTS[status];
+  if (!hint) hint = status >= 500 ? '对方服务端出错，稍后再试' : '请求失败';
+  let advice = '';
+  if (status === 401 || status === 403) advice = '，检查 providers.' + provider.name + '.apiKey';
+  if (status === 404) advice = '，检查 baseUrl 是否少了 /v1（当前 ' + provider.baseUrl + '）';
+  if (status === 429) advice = '，等一会儿再试，或检查余额/限流';
+  const detail = messageOf(body);
+  return new LlmError(
+    provider.name + ' 返回 HTTP ' + status + '（' + hint + '）' + advice + (detail ? '：' + detail : ''),
+    { status: status, code: 'http_' + status }
+  );
+}
+
+function mapFetchError(err, provider, timeoutMs) {
+  if (err instanceof LlmError) return err;
+  const code = (err && err.code) || (err && err.cause && err.cause.code) || '';
+  const host = hostOf(provider.baseUrl);
+  const timeout = timeoutMs || DEFAULT_TIMEOUT_MS;
+
+  if (code === 'TIMEOUT') {
+    return new LlmError(provider.name + ' 请求超过 ' + timeout + 'ms 没有响应，先看网络，再考虑调大 requestTimeoutMs', { code: 'timeout' });
+  }
+  if (code === 'ABORT_ERR' || (err && err.name === 'AbortError')) {
+    return new LlmError(provider.name + ' 的请求已取消', { code: 'aborted' });
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return new LlmError('连不上 ' + provider.name + '：域名解析失败（' + host + '），检查网络或 baseUrl', { code: 'dns' });
+  }
+  if (code === 'ECONNREFUSED') {
+    return new LlmError('连不上 ' + provider.name + '：' + host + ' 拒绝连接。连本地服务的话，先确认它已经启动', { code: 'refused' });
+  }
+  if (code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') {
+    return new LlmError('和 ' + provider.name + ' 的连接被重置，稍后重试', { code: 'reset' });
+  }
+  if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || code === 'SELF_SIGNED_CERT_IN_CHAIN') {
+    return new LlmError('连 ' + provider.name + ' 时证书校验失败（' + code + '），常见于公司代理或中转站', { code: 'tls' });
+  }
+  const detail = err && err.message ? err.message : String(err);
+  return new LlmError(provider.name + ' 请求失败：' + detail, { code: 'network' });
+}
+
+async function readText(res) {
+  try {
+    return await res.text();
+  } catch (err) {
+    return '';
+  }
+}
+
+/** 从单个 SSE 事件块里取出 data: 行（可能是多行 data） */
+function extractData(block) {
+  const lines = String(block).split('\n');
+  const parts = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.indexOf('data:') !== 0) continue; // 忽略 : ping 注释和 event:/id: 行
+    let value = line.slice(5);
+    if (value.charAt(0) === ' ') value = value.slice(1);
+    parts.push(value);
+  }
+  if (parts.length === 0) return null;
+  return parts.join('\n');
+}
+
+function parseChunk(data, provider) {
+  let json;
+  try {
+    json = JSON.parse(data);
+  } catch (err) {
+    throw new LlmError(provider.name + ' 返回了无法解析的数据段：' + String(data).slice(0, 200), { code: 'bad_chunk' });
+  }
+  if (json && json.error) {
+    const msg = (json.error && json.error.message) || JSON.stringify(json.error).slice(0, 200);
+    throw new LlmError(provider.name + ' 在流式响应里报错：' + msg, { code: 'stream_error' });
+  }
+  const choice = json && json.choices && json.choices[0];
+  const holder = choice && (choice.delta || choice.message);
+  const content = holder && holder.content;
+  return {
+    content: typeof content === 'string' ? content : '',
+    finishReason: (choice && choice.finish_reason) || null,
+  };
+}
+
+function extractWholeContent(text, provider) {
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    const flat = String(text).replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new LlmError(provider.name + ' 返回的内容既不是 SSE 也不是合法 JSON：' + flat, { code: 'bad_body' });
+  }
+  if (json && json.error) {
+    const msg = (json.error && json.error.message) || JSON.stringify(json.error).slice(0, 200);
+    throw new LlmError(provider.name + ' 返回错误：' + msg, { code: 'stream_error' });
+  }
+  const choice = json && json.choices && json.choices[0];
+  const content = choice && choice.message && choice.message.content;
+  if (typeof content !== 'string' || content.trim() === '') {
+    throw new LlmError(provider.name + ' 的响应里没有 content 字段', { code: 'empty_reply' });
+  }
+  return content;
+}
+
+/**
+ * 流式对话。async generator：每 yield 一段文本增量。
+ * 所有失败都抛 LlmError，message 是给人看的中文。
+ */
+async function* streamChat(options) {
+  const opts = options || {};
+  const provider = opts.provider;
+  const messages = opts.messages || [];
+  const fetchImpl = opts.fetchImpl || globalThis.fetch;
+  const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const outerSignal = opts.signal;
+
+  if (!provider) throw new LlmError('没有可用的 provider 配置', { code: 'no_provider' });
+  if (!provider.apiKey) {
+    throw new LlmError(
+      provider.name + ' 还没配置 API key：请编辑 config.json 的 providers.' + provider.name +
+        '.apiKey，或设置环境变量 WG_' + String(provider.name).toUpperCase() + '_API_KEY',
+      { code: 'no_api_key' }
+    );
+  }
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new LlmError('messages 为空，没有内容可以发给模型', { code: 'empty_messages' });
+  }
+  if (typeof fetchImpl !== 'function') {
+    throw new LlmError('当前运行时没有全局 fetch，需要 Node 18 及以上', { code: 'no_fetch' });
+  }
+
+  const url = trimBaseUrl(provider.baseUrl) + '/chat/completions';
+  const payload = { model: provider.chatModel, messages: messages, stream: true };
+  const temperature = opts.temperature === undefined ? provider.temperature : opts.temperature;
+  if (typeof temperature === 'number' && Number.isFinite(temperature)) payload.temperature = temperature;
+
+  const controller = new AbortController();
+  const abortWith = function (err) {
+    if (!controller.signal.aborted) controller.abort(err);
+  };
+
+  const timer = setTimeout(function () {
+    const timeoutError = new Error('timeout ' + timeoutMs + 'ms');
+    timeoutError.code = 'TIMEOUT';
+    abortWith(timeoutError);
+  }, timeoutMs);
+
+  const onOuterAbort = function () {
+    const abortError = new Error('aborted by caller');
+    abortError.code = 'ABORT_ERR';
+    abortWith(abortError);
+  };
+  if (outerSignal) {
+    if (outerSignal.aborted) onOuterAbort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+
+  const cleanup = function () {
+    clearTimeout(timer);
+    if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
+  };
+
+  let reader = null;
+  try {
+    let res;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          authorization: 'Bearer ' + provider.apiKey,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw mapFetchError(err, provider, timeoutMs);
+    }
+
+    if (!res.ok) throw mapHttpError(res.status, await readText(res), provider);
+
+    const contentType = (res.headers && res.headers.get ? res.headers.get('content-type') : '') || '';
+    if (contentType.indexOf('text/event-stream') === -1) {
+      // 有的中转站 / 本地服务会忽略 stream:true，直接回一份完整 JSON
+      const content = extractWholeContent(await readText(res), provider);
+      yield content;
+      return;
+    }
+
+    if (!res.body || typeof res.body.getReader !== 'function') {
+      throw new LlmError(provider.name + ' 返回了 SSE 头但没有可读的响应体', { code: 'empty_body' });
+    }
+
+    reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let produced = false;
+
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      buffer = (buffer + decoder.decode(step.value, { stream: true })).replace(/\r\n/g, '\n');
+
+      let index = buffer.indexOf('\n\n');
+      while (index !== -1) {
+        const data = extractData(buffer.slice(0, index));
+        buffer = buffer.slice(index + 2);
+        if (data !== null) {
+          if (data === '[DONE]') {
+            // 直接收到 [DONE] 却一个字都没产出，多半是模型名或额度有问题
+            if (!produced) {
+              throw new LlmError(provider.name + ' 连上了但一个字都没返回，检查模型名和账户额度', { code: 'empty_reply' });
+            }
+            return;
+          }
+          const chunk = parseChunk(data, provider);
+          if (chunk.content) {
+            produced = true;
+            yield chunk.content;
+          }
+        }
+        index = buffer.indexOf('\n\n');
+      }
+    }
+
+    // 收尾：最后一段可能没有以空行结束
+    const tail = extractData(buffer);
+    if (tail !== null && tail !== '[DONE]') {
+      const chunk = parseChunk(tail, provider);
+      if (chunk.content) {
+        produced = true;
+        yield chunk.content;
+      }
+    }
+
+    if (!produced) {
+      throw new LlmError(provider.name + ' 连上了但一个字都没返回，检查模型名和账户额度', { code: 'empty_reply' });
+    }
+  } catch (err) {
+    throw mapFetchError(err, provider, timeoutMs);
+  } finally {
+    cleanup();
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch (err) {
+        // 已经关了，忽略
+      }
+    }
+  }
+}
+
+module.exports = {
+  LlmError: LlmError,
+  streamChat: streamChat,
+  extractData: extractData,
+  parseChunk: parseChunk,
+  DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
+};
