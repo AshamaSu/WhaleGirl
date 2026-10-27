@@ -161,6 +161,19 @@
   .chip img { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; }
   .chip button { padding: 2px 7px; font-size: 12px; background: #eef4fa; color: var(--muted); }
   #status { font-size: 12px; color: var(--muted); padding: 0 18px 8px; min-height: 16px; }
+  .mood {
+    position: fixed; right: 16px; bottom: 96px; z-index: 5;
+    width: 150px; padding: 10px 12px 8px;
+    display: flex; flex-direction: column; gap: 4px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 6px 18px rgba(31, 95, 168, 0.12);
+  }
+  .mood-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .mood-head span { font-size: 12px; color: var(--muted); }
+  .mood-head b { font-size: 18px; color: var(--sea-deep); font-variant-numeric: tabular-nums; }
+  .mood svg { width: 100%; height: 26px; display: block; }
+  .mood-hint { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   @keyframes blink { 50% { opacity: 0; } }
   @media (max-width: 560px) {
@@ -170,6 +183,7 @@
     #chat { padding: 14px 14px 6px; }
     form { padding: 10px 14px 14px; }
     #status { padding: 0 14px 6px; }
+    .mood { right: 10px; bottom: 92px; width: 128px; }
   }
 </style>
 </head>
@@ -182,6 +196,7 @@
       <b id="who-name">蓝色小肥鱼</b>
       <span id="hint">正在连接…</span>
     </div>
+    <a href="/memory" id="memory-link" class="hidden">记忆</a>
     <a href="/persona">调参</a>
   </header>
 
@@ -204,6 +219,14 @@
   </form>
 </div>
 
+<div class="mood hidden" id="mood">
+  <div class="mood-head"><span id="mood-label">平静</span><b id="mood-value">60</b></div>
+  <svg viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+    <polyline id="mood-line" fill="none" stroke="#2f7fd6" stroke-width="1.6" stroke-linejoin="round" points="0,13 120,13"></polyline>
+  </svg>
+  <div class="mood-hint" id="mood-hint">最近没什么起伏</div>
+</div>
+
 <script>
 (function () {
   'use strict';
@@ -222,6 +245,12 @@
   var imageChip = document.getElementById('image-chip');
   var imageThumb = document.getElementById('image-thumb');
   var imageRemove = document.getElementById('image-remove');
+  var memoryLink = document.getElementById('memory-link');
+  var moodEl = document.getElementById('mood');
+  var moodLabelEl = document.getElementById('mood-label');
+  var moodValueEl = document.getElementById('mood-value');
+  var moodLineEl = document.getElementById('mood-line');
+  var moodHintEl = document.getElementById('mood-hint');
 
   var SESSION_KEY = 'whale_session';
   var sessionId = localStorage.getItem(SESSION_KEY);
@@ -332,6 +361,65 @@
       remove: function () {
         row.remove();
       },
+    };
+  }
+
+  /** 心情挂件：数值 + 近 24h 曲线，跟着 SSE 实时变 */
+  function renderMood(mood) {
+    if (!mood) return;
+    moodEl.classList.remove('hidden');
+    moodLabelEl.textContent = mood.label || '平静';
+    moodValueEl.textContent = typeof mood.value === 'number' ? String(mood.value) : '';
+
+    var history = Array.isArray(mood.history) ? mood.history : [];
+    var points = '0,13 120,13';
+    if (history.length >= 2) {
+      var values = history.map(function (item) { return Number(item.value) || 0; });
+      var min = Math.min.apply(null, values);
+      var max = Math.max.apply(null, values);
+      if (max - min < 4) {
+        min -= 2;
+        max += 2;
+      }
+      var span = max - min || 1;
+      points = values.map(function (value, index) {
+        var x = (index / (values.length - 1)) * 120;
+        var y = 24 - ((value - min) / span) * 22;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+    }
+    moodLineEl.setAttribute('points', points);
+
+    var last = history[history.length - 1];
+    moodHintEl.textContent = last && last.reason ? last.reason : '最近没什么起伏';
+  }
+
+  function loadMood() {
+    fetch('/api/mood')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) { if (data && data.mood) renderMood(data.mood); })
+      .catch(function () {});
+  }
+
+  /** 能力主动发过来的话（以后是主动搭话 / B站分享），当成她说话插进聊天 */
+  function pushProactive(text) {
+    if (!text) return;
+    var group = createGroup();
+    group.paint(String(text), false);
+  }
+
+  function connectEvents() {
+    if (typeof EventSource !== 'function') return;
+    var source = new EventSource('/api/events');
+    source.onmessage = function (event) {
+      var data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (err) {
+        return;
+      }
+      if (data.type === 'mood') renderMood(data.mood);
+      else if (data.type === 'push') pushProactive(data.text);
     };
   }
 
@@ -516,6 +604,14 @@
     .then(function (data) {
       setPersona(data.personaName);
       hintEl.textContent = data.provider + ' · ' + data.model;
+
+      var features = data.features || {};
+      if (features.memory && features.memory.enabled) memoryLink.classList.remove('hidden');
+      if (features.mood && features.mood.enabled) {
+        moodEl.classList.remove('hidden');
+        loadMood();
+      }
+      connectEvents();
     })
     .catch(function () {
       hintEl.textContent = '连不上服务，确认 node server.js 还在跑';

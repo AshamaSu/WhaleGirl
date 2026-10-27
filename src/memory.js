@@ -104,6 +104,12 @@ function openMemory(options) {
     const kept = [];
     for (let i = 0; i < data.facts.length; i += 1) {
       const fact = data.facts[i];
+      // 置顶的事实等于「永久记住」：不衰减，也不会被淘汰
+      if (fact.pinned === true) {
+        fact.strength = 1;
+        kept.push(fact);
+        continue;
+      }
       fact.strength = Number(fact.strength || 1) * settings.factDecay;
       if (fact.strength >= settings.minStrength) kept.push(fact);
     }
@@ -113,6 +119,7 @@ function openMemory(options) {
   function trimFacts() {
     if (data.facts.length <= settings.maxFacts) return;
     data.facts.sort(function (a, b) {
+      if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1;
       if (b.strength !== a.strength) return b.strength - a.strength;
       return String(a.lastSeen) < String(b.lastSeen) ? 1 : -1;
     });
@@ -162,6 +169,7 @@ function openMemory(options) {
         at: nowIso(),
         lastSeen: nowIso(),
         strength: 1,
+        pinned: false,
         source: source === 'tool' ? 'tool' : 'auto',
       };
       data.facts.push(fact);
@@ -174,11 +182,30 @@ function openMemory(options) {
       return data.facts.slice();
     },
 
+    /** 置顶 = 永久记住：强度拉回 1，之后不再衰减 */
+    setPinned(id, pinned) {
+      const fact = data.facts.find(function (item) { return item.id === id; });
+      if (!fact) return null;
+      fact.pinned = pinned === true;
+      if (fact.pinned) fact.strength = 1;
+      save();
+      return fact;
+    },
+
+    removeFact(id) {
+      const before = data.facts.length;
+      data.facts = data.facts.filter(function (item) { return item.id !== id; });
+      if (data.facts.length === before) return false;
+      save();
+      return true;
+    },
+
     factsForPrompt() {
       const alive = data.facts.filter(function (fact) {
         return Number(fact.strength || 0) >= settings.minStrength;
       });
       alive.sort(function (a, b) {
+        if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1;
         if (b.strength !== a.strength) return b.strength - a.strength;
         return String(a.lastSeen) < String(b.lastSeen) ? 1 : -1;
       });
@@ -241,6 +268,150 @@ function openMemory(options) {
   };
 
   return api;
+}
+
+function memoryDir(root) {
+  return path.join(root, DATA_DIR);
+}
+
+function readSessionFile(file) {
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.turns) || !Array.isArray(parsed.facts)) {
+    throw new Error('结构不对');
+  }
+  return parsed;
+}
+
+/** 会话列表：给时间线页面用。坏文件跳过，不让一个坏文件把整页拖崩 */
+function listSessions(options) {
+  const opts = options || {};
+  const dir = memoryDir(opts.root || process.cwd());
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+
+  const out = [];
+  for (let i = 0; i < names.length; i += 1) {
+    const name = names[i];
+    if (!name.endsWith('.json')) continue;
+    let parsed;
+    try {
+      parsed = readSessionFile(path.join(dir, name));
+    } catch (err) {
+      continue;
+    }
+    const pinned = parsed.facts.filter(function (fact) { return fact.pinned === true; }).length;
+    out.push({
+      sessionId: safeSessionId(parsed.sessionId || name.replace(/\.json$/, '')),
+      createdAt: String(parsed.createdAt || ''),
+      updatedAt: String(parsed.updatedAt || ''),
+      turns: parsed.turns.length,
+      facts: parsed.facts.length,
+      pinned: pinned,
+      summarized: Number(parsed.stats && parsed.stats.summarized) || 0,
+      summary: String(parsed.summary || '').slice(0, 80),
+    });
+  }
+  out.sort(function (a, b) {
+    return String(b.updatedAt).localeCompare(String(a.updatedAt));
+  });
+  return out;
+}
+
+const BACKUP_VERSION = 1;
+
+/** 整包导出（JSON）：备份/恢复用，不引第三方压缩库 */
+function exportAll(options) {
+  const opts = options || {};
+  const dir = memoryDir(opts.root || process.cwd());
+  const bundle = { version: BACKUP_VERSION, exportedAt: nowIso(), sessions: [] };
+
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return bundle;
+    throw err;
+  }
+
+  for (let i = 0; i < names.length; i += 1) {
+    const name = names[i];
+    if (!name.endsWith('.json')) continue;
+    let parsed;
+    try {
+      parsed = readSessionFile(path.join(dir, name));
+    } catch (err) {
+      continue;
+    }
+    bundle.sessions.push({
+      sessionId: safeSessionId(parsed.sessionId || name.replace(/\.json$/, '')),
+      memory: parsed,
+    });
+  }
+  return bundle;
+}
+
+/**
+ * 整包恢复：同名会话先备份成 .bak-时间戳，再原子覆盖。
+ * 返回明细而不抛错——一个会话坏了不该让整包恢复失败。
+ */
+function importAll(options) {
+  const opts = options || {};
+  const root = opts.root || process.cwd();
+  const dir = memoryDir(root);
+  const stamp = String(opts.stamp || Date.now());
+  const bundle = opts.bundle || {};
+  const result = { imported: 0, skipped: 0, errors: [] };
+
+  const sessions = Array.isArray(bundle.sessions) ? bundle.sessions : null;
+  if (!sessions) {
+    result.errors.push('备份文件里没有 sessions 数组');
+    return result;
+  }
+
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    result.errors.push('建不了记忆目录：' + (err.code || err.message));
+    return result;
+  }
+
+  for (let i = 0; i < sessions.length; i += 1) {
+    const item = sessions[i];
+    const memory = item && item.memory;
+    if (!memory || typeof memory !== 'object' || !Array.isArray(memory.turns) || !Array.isArray(memory.facts)) {
+      result.skipped += 1;
+      result.errors.push('第 ' + (i + 1) + ' 个会话结构不对，已跳过');
+      continue;
+    }
+
+    const sessionId = safeSessionId(item.sessionId || memory.sessionId);
+    const file = path.join(dir, sessionId + '.json');
+    if (fs.existsSync(file)) {
+      try {
+        fs.copyFileSync(file, file + '.bak-' + stamp);
+      } catch (err) {
+        // 备份失败不挡恢复，但记一笔让人知道
+        result.errors.push(sessionId + ' 的旧文件备份失败：' + (err.code || err.message));
+      }
+    }
+
+    const restored = Object.assign({}, memory, { sessionId: sessionId, restoredAt: nowIso() });
+    try {
+      const tmp = file + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(restored, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, file);
+      result.imported += 1;
+    } catch (err) {
+      result.skipped += 1;
+      result.errors.push(sessionId + ' 写入失败：' + (err.code || err.message));
+    }
+  }
+  return result;
 }
 
 const EXTRACT_SYSTEM = [
@@ -316,6 +487,10 @@ module.exports = {
   extractFacts: extractFacts,
   summarizeTurns: summarizeTurns,
   transcript: transcript,
+  listSessions: listSessions,
+  exportAll: exportAll,
+  importAll: importAll,
   DEFAULTS: DEFAULTS,
   DATA_DIR: DATA_DIR,
+  BACKUP_VERSION: BACKUP_VERSION,
 };

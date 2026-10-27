@@ -17,6 +17,31 @@
   "vision": {
     "provider": "zhipu"
   },
+  "features": {
+    "memory": { "enabled": false },
+    "mood": { "enabled": false },
+    "speakUp": {
+      "enabled": false,
+      "probability": 0.15,
+      "cooldownMinutes": 60,
+      "activeHours": [9, 23],
+      "quietHours": [0, 7]
+    },
+    "bili": {
+      "enabled": false,
+      "intervalMinutes": 120,
+      "targetUPs": [],
+      "pushTargets": [],
+      "allowWithoutSubtitle": true
+    },
+    "qq": {
+      "enabled": false,
+      "mode": "http",
+      "httpUrl": "http://127.0.0.1:3000",
+      "accessToken": "",
+      "allowedGroups": []
+    }
+  },
   "memory": {
     "maxTurns": 40,
     "keepRecentTurns": 12,

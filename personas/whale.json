@@ -52,11 +52,5 @@
   ],
   "reply": {
     "maxBubbles": 3
-  },
-  "mood": {
-    "enabled": false,
-    "value": 60,
-    "label": "平静",
-    "note": "P2 心情系统预留位，P0 不参与 prompt"
   }
 }

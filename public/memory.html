@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>记忆时间线 · 蓝色小肥鱼</title>
+<style>
+  :root {
+    --sea: #2f7fd6;
+    --sea-deep: #1f5fa8;
+    --ink: #1d2b3a;
+    --muted: #7b8fa3;
+    --line: #dbe7f1;
+    --warn: #c2703f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, #eaf4fb 0%, #f6fbfe 45%, #e6f1f9 100%);
+  }
+  .page { max-width: 980px; margin: 0 auto; padding: 18px 18px 40px; }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; margin-bottom: 16px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid var(--line); border-radius: 14px;
+  }
+  header h1 { font-size: 16px; margin: 0; flex: 1; letter-spacing: 0.5px; }
+  header a {
+    font-size: 12px; color: var(--sea-deep); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px;
+  }
+  header a:hover { background: #fff; }
+  button {
+    border: 0; border-radius: 10px; padding: 7px 12px;
+    font: inherit; font-size: 13px; color: #fff;
+    background: linear-gradient(180deg, #4a92dd, var(--sea));
+    cursor: pointer;
+  }
+  button.ghost {
+    background: #fff; color: var(--sea-deep); border: 1px solid var(--line);
+  }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .layout { display: grid; grid-template-columns: 240px 1fr; gap: 14px; align-items: start; }
+  .card {
+    background: rgba(255, 255, 255, 0.86);
+    border: 1px solid var(--line); border-radius: 14px; padding: 14px;
+  }
+  .card h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); font-weight: 600; letter-spacing: 0.4px; }
+  #sessions { display: flex; flex-direction: column; gap: 6px; max-height: 62vh; overflow-y: auto; }
+  .session {
+    text-align: left; background: #fff; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+  }
+  .session.active { border-color: var(--sea); box-shadow: 0 0 0 2px rgba(47, 127, 214, 0.14); }
+  .session b { font-size: 13px; font-weight: 600; }
+  .session span { font-size: 11px; color: var(--muted); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .toolbar .spacer { flex: 1; }
+  .hint { font-size: 12px; color: var(--muted); }
+  #summary { font-size: 13px; line-height: 1.6; white-space: pre-wrap; margin: 0 0 12px; }
+  #facts { display: flex; flex-direction: column; gap: 8px; }
+  .fact {
+    display: grid; grid-template-columns: 1fr 96px 132px; gap: 10px; align-items: center;
+    border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 9px 11px;
+  }
+  .fact.fading { opacity: 0.62; border-style: dashed; }
+  .fact.pinned { border-color: #f0d3b6; background: #fffaf3; }
+  .fact .text { font-size: 13px; line-height: 1.5; word-break: break-word; }
+  .fact .meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .bar { height: 6px; border-radius: 999px; background: #edf3f9; overflow: hidden; margin-top: 4px; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, #7fc0f0, var(--sea)); }
+  .fact.pinned .bar i { background: linear-gradient(90deg, #f2c193, #e08f4e); }
+  .strength { font-size: 11px; color: var(--muted); text-align: right; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .actions button { padding: 5px 9px; font-size: 12px; }
+  .empty { font-size: 13px; color: var(--muted); padding: 12px 0; }
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: rgba(29, 43, 58, 0.9); color: #fff; font-size: 13px;
+    padding: 9px 14px; border-radius: 10px; opacity: 0; transition: opacity 0.2s;
+    pointer-events: none; max-width: 80vw;
+  }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) {
+    .layout { grid-template-columns: 1fr; }
+    .fact { grid-template-columns: 1fr; gap: 6px; }
+    .strength { text-align: left; }
+    .actions { justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>记忆时间线</h1>
+    <a href="/">回到聊天</a>
+    <button class="ghost" id="refresh">刷新</button>
+  </header>
+
+  <div class="layout">
+    <section class="card">
+      <h2>会话</h2>
+      <div id="sessions"><div class="empty">加载中…</div></div>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <span class="hint" id="meta">选一个会话</span>
+        <span class="spacer"></span>
+        <a href="/api/memory/backup"><button class="ghost" type="button">下载备份</button></a>
+        <button class="ghost" type="button" id="restore-btn">恢复备份</button>
+        <input type="file" id="restore-file" accept="application/json,.json" hidden>
+      </div>
+      <p id="summary"></p>
+      <h2>记得的事<span class="hint" id="threshold"></span></h2>
+      <div id="facts"><div class="empty">还没有事实</div></div>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var sessionsEl = document.getElementById('sessions');
+  var factsEl = document.getElementById('facts');
+  var summaryEl = document.getElementById('summary');
+  var metaEl = document.getElementById('meta');
+  var thresholdEl = document.getElementById('threshold');
+  var toastEl = document.getElementById('toast');
+  var current = '';
+
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(function () { toastEl.classList.remove('show'); }, 2400);
+  }
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function shortTime(iso) {
+    if (!iso) return '';
+    var date = new Date(iso);
+    if (isNaN(date.getTime())) return String(iso);
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+
+  function api(path, options) {
+    return fetch(path, options).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) throw new Error(data.error || ('请求失败：' + res.status));
+        return data;
+      });
+    });
+  }
+
+  function loadSessions() {
+    return api('/api/memory/sessions').then(function (data) {
+      var list = data.sessions || [];
+      sessionsEl.textContent = '';
+      if (list.length === 0) {
+        sessionsEl.appendChild(el('div', 'empty', '还没有任何会话'));
+        return;
+      }
+      list.forEach(function (item) {
+        var button = el('button', 'session' + (item.sessionId === current ? ' active' : ''));
+        button.type = 'button';
+        button.appendChild(el('b', null, item.sessionId));
+        button.appendChild(el('span', null, item.turns + ' 轮 · ' + item.facts + ' 条事实' + (item.pinned ? ' · 置顶 ' + item.pinned : '')));
+        button.appendChild(el('span', null, shortTime(item.updatedAt)));
+        button.addEventListener('click', function () { select(item.sessionId); });
+        sessionsEl.appendChild(button);
+      });
+      if (!current && list.length > 0) select(list[0].sessionId);
+    });
+  }
+
+  function renderFacts(data) {
+    factsEl.textContent = '';
+    var facts = data.facts || [];
+    if (facts.length === 0) {
+      factsEl.appendChild(el('div', 'empty', '还没有事实。多聊几轮，她会自动记住重要的部分'));
+      return;
+    }
+
+    facts.forEach(function (fact) {
+      var row = el('div', 'fact' + (fact.pinned ? ' pinned' : '') + (fact.fading ? ' fading' : ''));
+
+      var left = el('div');
+      left.appendChild(el('div', 'text', fact.text));
+      var meta = '记于 ' + shortTime(fact.at) + ' · 最近提到 ' + shortTime(fact.lastSeen) +
+        ' · ' + (fact.source === 'tool' ? '她说要记住' : '自动抽取') +
+        (fact.fading ? ' · 快忘了' : '');
+      left.appendChild(el('div', 'meta', meta));
+      row.appendChild(left);
+
+      var strength = el('div');
+      var bar = el('div', 'bar');
+      var fill = el('i');
+      fill.style.width = Math.max(4, Math.min(100, fact.strength * 100)) + '%';
+      bar.appendChild(fill);
+      strength.appendChild(bar);
+      strength.appendChild(el('div', 'strength', fact.pinned ? '永久记住' : '强度 ' + Math.round(fact.strength * 100) + '%'));
+      row.appendChild(strength);
+
+      var actions = el('div', 'actions');
+      var pin = el('button', 'ghost', fact.pinned ? '取消置顶' : '置顶');
+      pin.type = 'button';
+      pin.addEventListener('click', function () {
+        pin.disabled = true;
+        api('/api/memory/pin', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: current, id: fact.id, pinned: !fact.pinned }),
+        }).then(function () {
+          toast(fact.pinned ? '已取消置顶' : '置顶成功，这条不会淡忘了');
+          loadTimeline();
+        }).catch(function (err) { toast(err.message); pin.disabled = false; });
+      });
+
+      var forget = el('button', 'ghost', '删掉');
+      forget.type = 'button';
+      forget.addEventListener('click', function () {
+        forget.disabled = true;
+        api('/api/memory/forget', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: current, id: fact.id }),
+        }).then(function () {
+          toast('已经忘掉了');
+          loadTimeline();
+        }).catch(function (err) { toast(err.message); forget.disabled = false; });
+      });
+
+      actions.appendChild(pin);
+      actions.appendChild(forget);
+      row.appendChild(actions);
+      factsEl.appendChild(row);
+    });
+  }
+
+  function loadTimeline() {
+    if (!current) return;
+    api('/api/memory/timeline?sessionId=' + encodeURIComponent(current)).then(function (data) {
+      metaEl.textContent = current + ' · ' + data.turns + ' 轮对话 · 更新于 ' + shortTime(data.updatedAt);
+      thresholdEl.textContent = data.minStrength
+        ? '（强度低于 ' + Math.round(data.minStrength * 100) + '% 会被忘掉）'
+        : '';
+      summaryEl.textContent = data.summary ? '【往事摘要】\n' + data.summary : '还没有摘要（对话攒够了会自动压缩）';
+      renderFacts(data);
+    }).catch(function (err) {
+      factsEl.textContent = '';
+      factsEl.appendChild(el('div', 'empty', '读不到记忆：' + err.message));
+    });
+  }
+
+  function select(sessionId) {
+    current = sessionId;
+    var buttons = sessionsEl.querySelectorAll('.session');
+    for (var i = 0; i < buttons.length; i += 1) {
+      buttons[i].classList.toggle('active', buttons[i].querySelector('b').textContent === sessionId);
+    }
+    loadTimeline();
+  }
+
+  document.getElementById('refresh').addEventListener('click', function () {
+    loadSessions().then(loadTimeline);
+  });
+
+  document.getElementById('restore-btn').addEventListener('click', function () {
+    document.getElementById('restore-file').click();
+  });
+
+  document.getElementById('restore-file').addEventListener('change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || '');
+      var bundle;
+      try {
+        bundle = JSON.parse(text);
+      } catch (err) {
+        toast('这个文件不是合法 JSON');
+        return;
+      }
+      if (!confirm('恢复会用备份里的内容覆盖同名会话（原文件会留 .bak 备份），继续吗？')) return;
+      api('/api/memory/restore', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(bundle),
+      }).then(function (data) {
+        toast('恢复完成：导入 ' + data.imported + ' 个会话' + (data.skipped ? '，跳过 ' + data.skipped + ' 个' : ''));
+        current = '';
+        loadSessions();
+      }).catch(function (err) { toast(err.message); });
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  });
+
+  loadSessions();
+})();
+</script>
+</body>
+</html>

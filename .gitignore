@@ -2,8 +2,11 @@
 config.json
 data/
 logs/
+img/
 *.log
 .env
+*.sw[a-p]
+*~
 
 # 运行时产物
 node_modules/

@@ -16,6 +16,8 @@ const { runAgent } = require('./src/agent');
 const { createTools } = require('./src/tools');
 const { openMemory, extractFacts, summarizeTurns, safeSessionId } = require('./src/memory');
 const { loadEnvFile, withProcessEnv } = require('./src/env');
+const { createBus } = require('./src/events');
+const { createFeatureHost } = require('./src/features');
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 4000;
@@ -235,6 +237,8 @@ function createServer(config, deps) {
   // 热加载开关本身只在启动时读一次：关掉之后配置就不会再变，改了得重启
   const hotReload = config.hotReload !== false;
   let cached = null;
+  // 先声明再赋值：能力模块 init 里可能回调 getConfig -> resolveLive -> sync
+  let featureHost = null;
 
   function resolveLive() {
     if (!hotReload && cached) return cached;
@@ -247,8 +251,40 @@ function createServer(config, deps) {
       persona: personaLoader(liveConfig.personaPath),
     };
     if (!hotReload) cached = resolved;
+    // 开关跟随热加载：每轮对齐一次启停状态，没变化就什么都不做
+    if (featureHost) featureHost.sync(liveConfig);
     return resolved;
   }
+
+  const bus = options.bus || createBus({ logger: logger });
+
+  const featureContext = {
+    root: root,
+    dataRoot: dataRoot,
+    publicDir: publicDir,
+    logger: logger,
+    bus: bus,
+    sendJson: sendJson,
+    sendText: sendText,
+    serveStatic: function (req, res, pathname) {
+      serveStatic(req, res, pathname, publicDir);
+    },
+    readJson: async function (req, limit) {
+      return parseJsonBody(await readBody(req, limit || MAX_BODY_BYTES));
+    },
+    getConfig: function () { return resolveLive().config; },
+    makeLlm: function () {
+      const live = resolveLive();
+      return buildLlmText(live.provider, live.config.requestTimeoutMs);
+    },
+  };
+
+  featureHost = options.features || createFeatureHost({
+    logger: logger,
+    context: featureContext,
+    modules: options.featureModules,
+  });
+  featureHost.sync(config);
 
   async function handleChat(req, res) {
     if (req.method !== 'POST') {
@@ -323,7 +359,7 @@ function createServer(config, deps) {
       const messages = buildMessages(
         persona,
         history.concat([{ role: 'user', content: input.message === '' ? '（看这张图）' : input.message }]),
-        { maxHistory: MAX_HISTORY, memoryText: memory.memoryBlock() }
+        { maxHistory: MAX_HISTORY, memoryText: memory.memoryBlock(), extraText: featureHost.promptText() }
       );
 
       if (vision) {
@@ -379,6 +415,16 @@ function createServer(config, deps) {
           llm: buildLlmText(liveProvider, liveTimeout),
           logger: logger,
           runner: options.backgroundRunner,
+        });
+        // 能力模块的回复后处理（目前是心情判定）同样只进日志，绝不影响这条回复
+        featureHost.afterReply({
+          sessionId: input.sessionId,
+          personaName: persona.name,
+          userText: input.message,
+          replyText: text,
+          ms: Date.now() - startedAt,
+        }).catch(function (err) {
+          logger.warn('[features] 回复后处理失败：' + (err && err.message ? err.message : err));
         });
       }
     } catch (err) {
@@ -443,6 +489,58 @@ function createServer(config, deps) {
     res.end('Method Not Allowed');
   }
 
+  /**
+   * 全局广播通道（SSE）：网页挂件、主动推送都从这里收。
+   * 只发不收，客户端断线即回收监听。
+   */
+  function handleEvents(req, res) {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { allow: 'GET' });
+      res.end('Method Not Allowed');
+      return;
+    }
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    res.write(': connected\n\n');
+
+    const send = function (payload) {
+      if (res.writableEnded || res.destroyed) return;
+      res.write('data: ' + JSON.stringify(payload) + '\n\n');
+    };
+
+    const offs = [
+      bus.on('mood', function (moodState) { send({ type: 'mood', mood: moodState }); }),
+      bus.on('push', function (msg) {
+        const payload = msg && typeof msg === 'object' ? msg : {};
+        send({ type: 'push', target: payload.target, text: payload.text, source: payload.source });
+      }),
+    ];
+
+    let closed = false;
+    function cleanup() {
+      if (closed) return;
+      closed = true;
+      clearInterval(ping);
+      for (let i = 0; i < offs.length; i += 1) offs[i]();
+    }
+
+    // 定期发注释帧：免得中间层掐连接，也顺手回收已经断掉的连接
+    const ping = setInterval(function () {
+      if (res.writableEnded || res.destroyed) cleanup();
+      else res.write(': ping\n\n');
+    }, 25000);
+    if (typeof ping.unref === 'function') ping.unref();
+
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+  }
+
   async function handle(req, res) {
     let url;
     let pathname;
@@ -468,6 +566,7 @@ function createServer(config, deps) {
         personaName: live.persona ? live.persona.name : '',
         hotReload: hotReload,
         tools: ['web_search', 'fetch_url', 'remember'],
+        features: featureHost.state(),
       });
       return;
     }
@@ -484,6 +583,18 @@ function createServer(config, deps) {
 
     if (pathname === '/api/memory') {
       handleMemory(req, res, url);
+      return;
+    }
+
+    if (pathname === '/api/events') {
+      handleEvents(req, res);
+      return;
+    }
+
+    // 能力模块注册的路由（关掉的能力不会注册，也就不会命中）
+    const featureRoute = featureHost.matchRoute(req.method, pathname);
+    if (featureRoute) {
+      await featureRoute.handler(req, res, url);
       return;
     }
 
@@ -516,6 +627,10 @@ function createServer(config, deps) {
   server.on('clientError', function (err, socket) {
     if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
+
+  // 测试和 main() 都需要拿到能力宿主（看状态、关停）
+  server.features = featureHost;
+  server.bus = bus;
 
   return server;
 }
@@ -573,6 +688,11 @@ function main() {
 
   const shutdown = function () {
     console.log('\n正在关闭…');
+    try {
+      server.features.stopAll();
+    } catch (err) {
+      console.error('关闭能力时出错：' + (err && err.message ? err.message : err));
+    }
     server.close(function () {
       process.exit(0);
     });

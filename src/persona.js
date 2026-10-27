@@ -71,7 +71,6 @@ function validatePersona(raw, filePath) {
     bottomLines: bottomLines.length > 0 ? bottomLines : DEFAULT_BOTTOM_LINES.slice(),
     fewShots: cleanShots,
     reply: { maxBubbles: maxBubbles },
-    mood: raw.mood && typeof raw.mood === 'object' ? raw.mood : {},
     source: filePath,
   };
 }
@@ -184,8 +183,10 @@ function normalizeHistory(history, limit) {
 function buildMessages(persona, history, options) {
   const opts = options || {};
   const limit = opts.maxHistory || DEFAULT_HISTORY_LIMIT;
-  // 记忆块并进同一条 system 消息，避免出现两条 system
-  const systemPrompt = buildSystemPrompt(persona) + (opts.memoryText ? '\n\n' + opts.memoryText : '');
+  // 记忆块 / 能力模块的片段都并进同一条 system 消息，避免出现两条 system
+  const systemPrompt = buildSystemPrompt(persona) +
+    (opts.memoryText ? '\n\n' + opts.memoryText : '') +
+    (opts.extraText ? '\n\n' + opts.extraText : '');
   const messages = [{ role: 'system', content: systemPrompt }];
   for (let i = 0; i < persona.fewShots.length; i += 1) {
     messages.push({ role: 'user', content: persona.fewShots[i].user });

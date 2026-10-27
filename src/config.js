@@ -29,6 +29,49 @@ function pickMemorySettings(raw, warnings) {
   return out;
 }
 
+const FEATURE_NAMES = ['memory', 'mood', 'speakUp', 'bili', 'qq'];
+
+/**
+ * 能力开关归一化：未声明 = 关闭。
+ * 允许简写 "mood": true，也允许完整对象 { enabled: true, ...参数 }。
+ */
+function pickFeatures(raw, warnings) {
+  const out = {};
+  if (raw === undefined || raw === null) return out;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    warnings.push('features 不是对象，已忽略（所有能力按关闭处理）');
+    return out;
+  }
+
+  const names = Object.keys(raw);
+  const unknown = [];
+  for (let i = 0; i < names.length; i += 1) {
+    const name = names[i];
+    const value = raw[name];
+
+    if (typeof value === 'boolean') {
+      out[name] = { enabled: value };
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const section = JSON.parse(JSON.stringify(value));
+      const parsed = section.enabled === undefined ? null : toBool(section.enabled, null);
+      if (section.enabled !== undefined && parsed === null) {
+        warnings.push('features.' + name + '.enabled 的值 "' + section.enabled + '" 看不懂，按关闭处理');
+      }
+      section.enabled = parsed === true;
+      out[name] = section;
+    } else {
+      warnings.push('features.' + name + ' 既不是布尔值也不是对象，已忽略');
+    }
+
+    if (FEATURE_NAMES.indexOf(name) === -1) unknown.push(name);
+  }
+
+  if (unknown.length > 0) {
+    warnings.push('features 里有当前没有实现的能力：' + unknown.join('、') + '（已实现：' + FEATURE_NAMES.join('、') + '）');
+  }
+  return out;
+}
+
 /** 模板里的占位 key，等同未填 */
 const PLACEHOLDER_KEY = /^(?:your[-_ ]?key.*|sk-xxx.*|<.*>)$/i;
 
@@ -198,6 +241,7 @@ function loadConfig(options) {
     active: active,
     personaPath: path.isAbsolute(personaFile) ? personaFile : path.join(root, personaFile),
     hotReload: hotReload,
+    features: pickFeatures(raw.features, warnings),
     memory: pickMemorySettings(raw.memory, warnings),
     agent: {
       maxRounds: toNumber(firstDefined(env.WG_MAX_ROUNDS, raw.agent && raw.agent.maxRounds), 4),
@@ -270,6 +314,8 @@ module.exports = {
   describeProvider: describeProvider,
   isPlaceholder: isPlaceholder,
   toBool: toBool,
+  pickFeatures: pickFeatures,
+  FEATURE_NAMES: FEATURE_NAMES,
   CONFIG_FILE: CONFIG_FILE,
   EXAMPLE_FILE: EXAMPLE_FILE,
 };
