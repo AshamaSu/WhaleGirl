@@ -81,6 +81,23 @@ function loadPersona(filePath) {
   return validatePersona(readPersonaFile(filePath), filePath);
 }
 
+/** 模型不知道今天几号，问"今天有什么新闻"就会瞎猜年份 */
+function formatNow() {
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date());
+  } catch (err) {
+    return new Date().toISOString();
+  }
+}
+
 function bullet(items, prefix) {
   return items.map(function (item) { return prefix + item; }).join('\n');
 }
@@ -123,7 +140,16 @@ function buildSystemPrompt(persona) {
       '- 底线被触碰时用一两句话轻轻带过，不长篇说教'
   );
 
+  sections.push(
+    '【工具与事实】\n' +
+      '- 需要最新信息（新闻、价格、天气、某个具体事件的发生经过）时，调用 web_search；摘要不够就 fetch_url 读原文\n' +
+      '- 用了工具就要说具体：谁、发生了什么、什么时候，别用比喻代替事实\n' +
+      '- 回答的最后单独一段给出 1~2 条来源，格式「来源：链接」，链接只能来自工具结果，不许自己编\n' +
+      '- 工具失败或查不到时，直接说"我现在查不到"，不要拿想象填空白'
+  );
+
   sections.push('【场景】你现在在网页上和一个人一对一聊天，对方说什么你就顺着接，别像客服。');
+  sections.push('【现在的时间】' + formatNow() + '（用到"今天/最近"时以这个时间为准）');
 
   return sections.join('\n\n');
 }

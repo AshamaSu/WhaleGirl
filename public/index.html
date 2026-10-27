@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>小鲸</title>
+<title>蓝色小肥鱼</title>
 <style>
   :root {
     --sea: #2f7fd6;
@@ -176,9 +176,10 @@
 <body>
 <div class="app">
   <header>
-    <div class="avatar" id="avatar">鲸</div>
+    <!-- 名字的兜底值跟 personas/whale.json 的 name 一致；页面加载后由 /api/health 覆盖 -->
+    <div class="avatar" id="avatar">蓝</div>
     <div class="who">
-      <b id="who-name">小鲸</b>
+      <b id="who-name">蓝色小肥鱼</b>
       <span id="hint">正在连接…</span>
     </div>
     <a href="/persona">调参</a>
@@ -196,7 +197,7 @@
     <div class="row">
       <button type="button" class="ghost" id="image-pick" title="发一张图">图片</button>
       <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
-      <textarea id="input" rows="1" placeholder="和小鲸说点什么…"></textarea>
+      <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
       <button type="submit" id="send">发送</button>
       <button type="button" id="stop" class="stop hidden">停止</button>
     </div>

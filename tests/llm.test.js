@@ -74,7 +74,7 @@ test('按顺序拿到增量并在 [DONE] 结束', async function () {
 });
 
 test('一个 SSE 事件被拆到两个 chunk 也能拼回来', async function () {
-  const frame = delta('小鲸');
+  const frame = delta('蓝色小肥鱼');
   const cut = Math.floor(frame.length / 2);
 
   const result = await collect(streamChat({
@@ -85,7 +85,7 @@ test('一个 SSE 事件被拆到两个 chunk 也能拼回来', async function ()
     },
   }));
 
-  assert.strictEqual(result, '小鲸');
+  assert.strictEqual(result, '蓝色小肥鱼');
 });
 
 test('[DONE] 之后的数据被忽略', async function () {

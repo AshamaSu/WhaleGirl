@@ -2,7 +2,7 @@
   "name": "whale-girl",
   "version": "0.1.0",
   "private": true,
-  "description": "蓝发鲸鱼娘「小鲸」——零依赖自研聊天体",
+  "description": "蓝发鲸鱼娘「蓝色小肥鱼」——零依赖自研聊天体",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {

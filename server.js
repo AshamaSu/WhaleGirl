@@ -547,7 +547,14 @@ function main() {
 
   server.listen(config.port, config.host, function () {
     const provider = config.providers[config.active];
-    console.log('小鲸已启动 → http://' + config.host + ':' + config.port);
+    // 名字只认人设文件，改 whale.json 的 name 这里跟着变
+    let personaName = '';
+    try {
+      personaName = loadPersona(config.personaPath).name;
+    } catch (err) {
+      console.warn('  警告：读人设拿不到名字（' + err.message + '）');
+    }
+    console.log((personaName || '服务') + ' 已启动 → http://' + config.host + ':' + config.port);
     console.log('  配置：' + config.source + ' · ' + describeProvider(provider));
     const envCount = Object.keys(fileEnv || {}).length;
     console.log('  .env：' + (envCount > 0 ? '已加载 ' + envCount + ' 项（进程环境优先）' : '没找到，只用 config.json'));
