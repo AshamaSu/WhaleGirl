@@ -38,6 +38,10 @@
 | `WG_TAVILY_API_KEY` | 搜索 key，不填则 `web_search` 只会如实说搜不了 |
 | `WG_VISION_PROVIDER` | 图片走哪个 provider（默认取第一个配了 visionModel 的） |
 | `WG_MAX_ROUNDS` | 工具循环上限，默认 4 |
+| `WG_BILI_BUVID3` | B站免登录风控标识，不填会自动申领一个 |
+| `WG_BILI_SESSDATA` / `WG_BILI_BILI_JCT` / `WG_BILI_DEDE_USER_ID` | B站登录 cookie，只为 AI 字幕/后续写操作准备 |
+
+> B站相关变量只在 `features.bili` 启动时读入，改完要重启服务（其余配置仍然热加载）。
 
 ### 热加载开关
 

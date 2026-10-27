@@ -165,3 +165,25 @@ test('comments 归一化作者/内容/点赞', async function () {
   const list = await api.comments({ bvid: 'BV1gExu6GEjZ', ps: 3 });
   assert.deepEqual(list, [{ author: '阿甲', content: '哈哈哈', like: 12 }]);
 });
+
+test('多语言字幕轨优先中文，而不是阵列里第一条', async function () {
+  const { api } = apiWith({
+    '/x/player/v2': {
+      code: 0,
+      data: {
+        subtitle: {
+          subtitles: [
+            { lan: 'en-US', lan_doc: 'English', subtitle_url: '//aisubtitle.hdslb.com/en.json' },
+            { lan: 'ai-zh', lan_doc: '中文（自动生成）', subtitle_url: '//aisubtitle.hdslb.com/zh.json' },
+          ],
+        },
+      },
+    },
+    '/en.json': { body: [{ from: 0, to: 1, content: 'english line' }] },
+    '/zh.json': { body: [{ from: 0, to: 1, content: '中文那一行' }] },
+  });
+
+  const result = await api.subtitle({ bvid: 'BV1gExu6GEjZ', cid: 5 });
+  assert.equal(result.text, '中文那一行');
+  assert.equal(result.lan, '中文（自动生成）');
+});

@@ -63,6 +63,25 @@ function normalizeItem(raw, nowMs) {
   };
 }
 
+/**
+ * 多语言轨优先中文：zh-CN（人工） > ai-zh（自动）> 其他语言。
+ * 只取第一条会在外语视频里拿到看不懂的轨道。
+ */
+function pickTrack(tracks) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  function rank(track) {
+    const lan = String((track && track.lan) || '').toLowerCase();
+    if (/^zh/.test(lan)) return 0;
+    if (/zh/.test(lan)) return 1;
+    return 2;
+  }
+  let best = null;
+  for (let i = 0; i < list.length; i += 1) {
+    if (!best || rank(list[i]) < rank(best)) best = list[i];
+  }
+  return best;
+}
+
 function assertBvid(value) {
   const bvid = String(value == null ? '' : value).trim();
   if (!BV_PATTERN.test(bvid)) throw new BiliError('bvid 不合法：' + (value === undefined ? '(空)' : value), 0);
@@ -147,7 +166,7 @@ function createBiliApi(client, options) {
       return { empty: true, reason: client.hasLogin() ? '这条视频没上传字幕' : '没有公开字幕（AI 字幕要登录）', text: '', count: 0 };
     }
 
-    const track = usable[0];
+    const track = pickTrack(usable);
     const url = /^https?:/i.test(track.subtitle_url) ? track.subtitle_url : 'https:' + track.subtitle_url;
     let body;
     try {
@@ -195,6 +214,7 @@ function createBiliApi(client, options) {
 
 module.exports = {
   createBiliApi: createBiliApi,
+  pickTrack: pickTrack,
   stripTags: stripTags,
   toSeconds: toSeconds,
   daysAgo: daysAgo,

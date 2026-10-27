@@ -135,3 +135,15 @@ test('登录 cookie 从环境变量读，hasLogin 正确', function () {
   });
   assert.equal(client.hasLogin(), true);
 });
+
+test('不传 env 时退回 process.env：脚本里直接 new 也能读到 cookie', function () {
+  const backup = process.env.WG_BILI_SESSDATA;
+  process.env.WG_BILI_SESSDATA = 'from-process-env';
+  try {
+    const client = createBiliClient({ fetchImpl: async function () { return { ok: true, status: 200, json: async function () { return { code: 0, data: null }; } }; }, intervalMs: 1 });
+    assert.equal(client.hasLogin(), true);
+  } finally {
+    if (backup === undefined) delete process.env.WG_BILI_SESSDATA;
+    else process.env.WG_BILI_SESSDATA = backup;
+  }
+});

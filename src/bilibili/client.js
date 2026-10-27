@@ -53,7 +53,8 @@ function createBiliClient(options) {
   const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : DEFAULT_INTERVAL_MS;
   const clock = typeof opts.now === 'function' ? opts.now : function () { return new Date(); };
   const logger = opts.logger || console;
-  const env = opts.env || {};
+  // 不传就退回 process.env：单测和脚本直接 new 也能读到 WG_BILI_*
+  const env = opts.env || process.env || {};
 
   const auth = {
     sessdata: String(opts.sessdata || env.WG_BILI_SESSDATA || '').trim(),

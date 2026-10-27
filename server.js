@@ -247,6 +247,7 @@ function createServer(config, deps) {
     const liveConfig = configLoader({ root: root, env: env });
     const resolved = {
       config: liveConfig,
+      env: env,
       provider: resolveProvider(liveConfig, liveConfig.active),
       persona: personaLoader(liveConfig.personaPath),
     };
@@ -273,6 +274,8 @@ function createServer(config, deps) {
       return parseJsonBody(await readBody(req, limit || MAX_BODY_BYTES));
     },
     getConfig: function () { return resolveLive().config; },
+    // 能力模块里凡是要读 .env（比如 B站 cookie）都走这里，别直接摸 process.env
+    getEnv: function () { return resolveLive().env || {}; },
     makeLlm: function () {
       const live = resolveLive();
       return buildLlmText(live.provider, live.config.requestTimeoutMs);

@@ -49,7 +49,7 @@ API 参数以 [SocialSisterYi/bilibili-API-collect](https://github.com/SocialSis
 | 写操作（评论/私信） | `/x/v2/reply/add`（csrf=bili_jct）、私信 web_im 接口 | **P2e 再做**；需 SESSDATA + bili_jct，有风控 |
 
 **鉴权分两档**（配置进 `.env` / 环境变量，命名沿既有 `WG_` 前缀）：
-- **阶段 1（只读，默认）**：无登录。手动设置一次 `WG_BILI_BUVID3`（浏览器 F12 随便复制一个）即可绕开 -352。能看热门、搜索、CC 字幕、评论——足够跑通全流程。
+- **阶段 1（只读，默认）**：无登录。`buvid3` 由客户端第一次请求前自动向 `/x/frontend/finger/spi` 申领（公开接口，实测 search 直接 0），`WG_BILI_BUVID3` 只作覆盖手段。能看热门、搜索、CC 字幕、评论——足够跑通全流程。
 - **阶段 2（登录，为写操作准备）**：`.env` 加 `WG_BILI_SESSDATA` / `WG_BILI_BILI_JCT` / `WG_BILI_DEDE_USER_ID`（浏览器复制）。**不做 QR 扫码登录**——二维码渲染/轮询工程量大且受益低，剪贴板 cookie 一分钟搞定；QR 登录列为可选后续项。
 - 统一请求头（User-Agent、Referer）+ 全局请求间隔 ≥2s + 失败退避；接口层独立文件，风控参数变动只改一处。
 
@@ -122,7 +122,13 @@ API 参数以 [SocialSisterYi/bilibili-API-collect](https://github.com/SocialSis
 
 **风险与对策**：B站 wbi/风控参数随时间变动 → 接口层单文件隔离 + 冒烟脚本常备；AI 字幕需登录 → 只读阶段按无字幕降级；无登录时搜索结果可能受限 → 热门流兜底。
 
-## 9. 实现记录（2026-10-27）
+## 9. 审核发现的遗留问题（2026-10-27 已修）
+
+1. **账号 Cookie 断链（P0 级，阻塞 AI 字幕）** —— 已修：server 的 `resolveLive()` 现在把 `env` 一并解析出来，featureContext 暴露 `getEnv()`；`bili/index.js` 用 `ctx.getEnv()` 创建 client，`client.js` 再兜底到 `process.env`。链路是 `WG_* 进程环境 > .env > 空`，和云上用 systemd 注入环境变量的 ADR 一致。**注意：client 只在能力启动时创建，改 `.env` 的 B站 cookie 需要重启**（已写进 README）。
+2. **多字幕轨未优先中文（P2 级）** —— 已修：`api.js` 新增 `pickTrack()`，排序为 `zh-*`（人工）> `ai-zh`（自动）> 其他语言。
+3. **E2E 未完成** —— 已补：见 §10。
+
+## 10. 实现记录（2026-10-27）
 
 按本方案实现，落地时改了五处，原因都写在这里：
 

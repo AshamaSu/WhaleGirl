@@ -29,6 +29,7 @@ function fakeCtx(overrides) {
     active: 'fake',
   }, overrides && overrides.config);
   const llmCalls = [];
+  const env = (overrides && overrides.env) || {};
 
   const ctx = {
     root: ROOT,
@@ -44,6 +45,7 @@ function fakeCtx(overrides) {
       };
     },
     getConfig: function () { return config; },
+    getEnv: function () { return env; },
     route: function (method, pathname, handler) {
       routes.push({ method: method, pathname: pathname, handler: handler });
     },
@@ -198,5 +200,27 @@ test('子代理失败不会把异常抛到装配层', async function () {
     assert.match(result.error, /模型挂了/);
   } finally {
     env.handle.stop();
+  }
+});
+
+test('B站 cookie 走 ctx.getEnv：.env 里配了 SESSDATA 就算登录', async function () {
+  const run = startModule({ ctx: { env: { WG_BILI_SESSDATA: 'sess', WG_BILI_DEDE_USER_ID: '42' } } });
+  try {
+    const res = {};
+    await run.routes[0].handler({}, res);
+    assert.equal(res.body.login, true);
+  } finally {
+    run.handle.stop();
+  }
+});
+
+test('没配 cookie 时 login 为 false，接口层按未登录降级', async function () {
+  const run = startModule();
+  try {
+    const res = {};
+    await run.routes[0].handler({}, res);
+    assert.equal(res.body.login, false);
+  } finally {
+    run.handle.stop();
   }
 });

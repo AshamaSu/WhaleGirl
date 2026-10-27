@@ -79,6 +79,8 @@ function createBiliModule(options) {
       });
 
       const client = opts.client || createBiliClient({
+        // .env 里的 B站 cookie 要经 ctx.getEnv 拿：server 不会把它们写进 process.env
+        env: typeof ctx.getEnv === 'function' ? ctx.getEnv() : process.env,
         logger: logger,
         intervalMs: section.requestIntervalMs,
         timeoutMs: section.timeoutMs > 0 ? section.timeoutMs : undefined,
