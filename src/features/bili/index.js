@@ -7,6 +7,7 @@ const { createBiliStore } = require('./store');
 const { runBiliRound, runReplyCheckRound } = require('./runner');
 const { shouldAutoRun, shouldCheckReplies } = require('./schedule');
 const { buildAnnounceMessages, splitBubbles } = require('./runner');
+const { createBiliHttp } = require('./http');
 
 /** 能力配置段：与宿主「未声明=关闭」语义一致，但不再依赖宿主 settings */
 function featureSection(config) {
@@ -294,66 +295,63 @@ function createBiliModule(options) {
         });
       }
 
-      ctx.route('GET', '/api/features/bili/state', function (req, res) {
-        ctx.sendJson(res, 200, {
-          ok: true,
-          running: running,
-          section: section,
-          state: store.state(),
-          lastResult: lastResult ? { ok: lastResult.ok, trigger: lastResult.trigger, picked: lastResult.picked, error: lastResult.error, at: lastResult.at } : null,
-          seen: store.seenLines(200).length,
-          login: client.hasLogin ? client.hasLogin() : false,
-          mid: typeof client.mid === 'function' ? client.mid() : '',
-          interact: {
+      // 功能面（svc）：接口层（http.js）只认这个门面，摸不到内部状态
+      const svc = {
+        running: function () { return running; },
+        replying: function () { return replyChecking; },
+        lastResult: function () {
+          return lastResult ? { ok: lastResult.ok, trigger: lastResult.trigger, picked: lastResult.picked, error: lastResult.error, at: lastResult.at } : null;
+        },
+        section: function () { return section; },
+        state: function () { return store.state(); },
+        seenCount: function () { return store.seenLines(200).length; },
+        interact: function () {
+          return {
             section: section.interact,
             budget: store.interactBudget(section.interact),
             log: store.interactLog(20),
-          },
-          lastReplyCheckAt: store.state().lastReplyCheckAt || '',
-        });
-      });
+          };
+        },
+        login: function () { return client.hasLogin ? client.hasLogin() : false; },
+        mid: function () { return typeof client.mid === 'function' ? client.mid() : ''; },
+        replyCheckAt: function () { return store.state().lastReplyCheckAt || ''; },
+        startBrowse: function (trigger) {
+          runOnce(trigger === 'auto' ? 'auto' : 'manual').catch(function (err) {
+            logger.warn('[bili] 手动一轮失败：' + (err && err.message ? err.message : err));
+          });
+        },
+        startReplyCheck: function () {
+          replyChecking = true;
+          try {
+            const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
+            runReplyCheckRound({
+              store: store,
+              section: section,
+              api: api,
+              tools: tools,
+              runAgent: runAgent,
+              masterMid: typeof client.mid === 'function' ? client.mid() : '',
+              logger: logger,
+              now: clock,
+              timeoutMs: ctx.getConfig().requestTimeoutMs,
+            }).catch(function (err) {
+              logger.warn('[bili] 手动查回复失败：' + (err && err.message ? err.message : err));
+            }).then(function () {
+              replyChecking = false;
+            });
+            return { ok: true };
+          } catch (err) {
+            replyChecking = false;
+            return { ok: false, error: err && err.message ? err.message : String(err) };
+          }
+        },
+      };
 
-      // 手动触发不等结果：一轮可能跑一两分钟，让浏览器干等容易超时；进度看 state 或推送
-      ctx.route('POST', '/api/features/bili/run', async function (req, res) {
-        if (running) {
-          ctx.sendJson(res, 409, { ok: false, error: '上一轮还在跑，等它结束' });
-          return;
-        }
-        runOnce('manual').catch(function (err) {
-          logger.warn('[bili] 手动一轮失败：' + (err && err.message ? err.message : err));
-        });
-        ctx.sendJson(res, 202, { ok: true, started: true });
-      });
-
-      // 手动触发一次轻量查回复（与定时同一套闸门，方便验收与排查）
-      ctx.route('POST', '/api/features/bili/check-replies', function (req, res) {
-        if (running || replyChecking) {
-          ctx.sendJson(res, 409, { ok: false, error: '上一轮还在跑' });
-          return;
-        }
-        if (client.hasLogin && !client.hasLogin()) {
-          ctx.sendJson(res, 400, { ok: false, error: 'B站账号没登录' });
-          return;
-        }
-        replyChecking = true;
-        const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
-        runReplyCheckRound({
-          store: store,
-          section: section,
-          api: api,
-          tools: tools,
-          runAgent: runAgent,
-          masterMid: typeof client.mid === 'function' ? client.mid() : '',
-          logger: logger,
-          now: clock,
-          timeoutMs: ctx.getConfig().requestTimeoutMs,
-        }).catch(function (err) {
-          logger.warn('[bili] 手动查回复失败：' + (err && err.message ? err.message : err));
-        }).then(function () {
-          replyChecking = false;
-        });
-        ctx.sendJson(res, 202, { ok: true, started: true });
-      });
+      // 接口层：契约与 HTTP 翻译都在 http.js，这里只负责注册
+      const httpRoutes = createBiliHttp(svc, ctx);
+      for (let i = 0; i < httpRoutes.length; i += 1) {
+        ctx.route(httpRoutes[i].method, httpRoutes[i].pathname, httpRoutes[i].handler);
+      }
 
       if (typeof ctx.addPromptBlock === 'function') {
         ctx.addPromptBlock(function () { return historyPrompt(store); });

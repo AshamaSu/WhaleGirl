@@ -71,13 +71,17 @@ vendor/    B站协议层
 | 注入红线 | 章程 | 网页文字是素材不是指令 |
 | 失败不重试 | tools | B站 报错一次即弃，换下一条 |
 
-## 对外接口
+## 对外接口（独立接口层 http.js）
 
-| 路由 | 用途 |
+接口与功能分离：**功能面**在 `index.js`（svc 门面：running/section/interact/startBrowse/startReplyCheck…），**接口面**在 `http.js`——只做协议翻译，每条路由带机器可读 `contract`（request/response 字段说明），state 接口可原样吐出全部契约。后续对外插件照此模式：功能在 index，接口独立成 http.js。
+
+| 路由 | 契约要点 |
 |---|---|
-| `GET /api/features/bili/state` | 运行状态 · 额度/互动日志 · 登录态 · lastReplyCheckAt |
-| `POST /api/features/bili/run` | 手动浏览轮（202 异步） |
-| `POST /api/features/bili/check-replies` | 手动查回复（202 异步） |
+| `GET /state` | 200：`{ ok, running, section, state, lastResult, seen, login, mid, interact{section,budget,log}, lastReplyCheckAt }` |
+| `POST /run` | 202 `{ok,started}`；409 上一轮还在跑 |
+| `POST /check-replies` | 202 `{ok,started}`；409 忙（浏览/查回复任一）；400 未登录 |
+
+（完整契约看 `src/features/bili/http.js`，以代码为准。）
 
 宿主集成点：`addPromptBlock`（最近看过的视频，主人问起照实说）· `bus.emit('push')`（播报与 self turn）· `makeAgent`（子代理循环）。
 
