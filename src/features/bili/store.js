@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const MAX_SEEN = 500;
+const MAX_HISTORY_LINES = 2000;
+const MAX_HISTORY_BYTES = 512 * 1024;
 
 function pad(num) {
   return (num < 10 ? '0' : '') + num;
@@ -38,6 +40,7 @@ function createBiliStore(options) {
   const base = path.join(root, 'data', 'bili');
   const outDir = path.join(base, 'out');
   const digestDir = path.join(base, 'digest');
+  const historyPath = path.join(base, 'history.jsonl');
   const stateFile = path.join(base, 'state.json');
   const seenFile = path.join(base, 'seen.json');
 
@@ -182,10 +185,84 @@ function createBiliStore(options) {
     return appendFile(path.join(digestDir, monthKeyOf(date || clock()) + '.md'), text);
   }
 
+  /** 浏览历史：一行一条 JSON，只记「她自己看过的」，供对话里被引用 */
+  function appendHistory(items, meta) {
+    const list = Array.isArray(items) ? items : [];
+    if (list.length === 0) return 0;
+    const when = meta && meta.at instanceof Date ? meta.at : clock();
+    const trigger = meta && meta.trigger === 'auto' ? 'auto' : 'manual';
+    const lines = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i] || {};
+      if (!item.bvid) continue;
+      lines.push(JSON.stringify({
+        at: when.toISOString(),
+        date: dayKeyOf(when),
+        trigger: trigger,
+        bvid: String(item.bvid),
+        title: String(item.title || ''),
+        up: String(item.up || ''),
+        link: String(item.link || ('https://www.bilibili.com/video/' + item.bvid)),
+      }));
+    }
+    if (lines.length === 0) return 0;
+    ensureDirs();
+    try {
+      fs.appendFileSync(historyPath, lines.join('\n') + '\n', 'utf8');
+    } catch (err) {
+      warn('写浏览历史失败：' + (err.code || err.message));
+      return 0;
+    }
+    trimHistory();
+    return lines.length;
+  }
+
+  function trimHistory() {
+    try {
+      const stat = fs.statSync(historyPath);
+      if (stat.size < MAX_HISTORY_BYTES) return;
+      const kept = fs.readFileSync(historyPath, 'utf8').split('\n').filter(Boolean).slice(-MAX_HISTORY_LINES);
+      const tmp = historyPath + '.tmp';
+      fs.writeFileSync(tmp, kept.join('\n') + '\n', 'utf8');
+      fs.renameSync(tmp, historyPath);
+    } catch (err) {
+      warn('整理浏览历史失败：' + (err.code || err.message));
+    }
+  }
+
+  /** 倒序取最近 N 条；days > 0 时只看最近这些天 */
+  function recentHistory(limit, days) {
+    const max = Number(limit) > 0 ? Math.floor(Number(limit)) : 5;
+    const span = Number(days) > 0 ? Math.floor(Number(days)) : 0;
+    let rows = [];
+    try {
+      if (!fs.existsSync(historyPath)) return [];
+      rows = fs.readFileSync(historyPath, 'utf8').split('\n');
+    } catch (err) {
+      warn('读浏览历史失败：' + (err.code || err.message));
+      return [];
+    }
+    const out = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < max; i -= 1) {
+      const line = rows[i].trim();
+      if (line === '') continue;
+      let row;
+      try { row = JSON.parse(line); } catch (e) { continue; }
+      if (!row || !row.bvid) continue;
+      if (span > 0) {
+        const t = Date.parse(row.at);
+        if (Number.isFinite(t) && clock().getTime() - t > span * 86400000) continue;
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
   return {
     base: base,
     outDir: outDir,
     digestDir: digestDir,
+    historyPath: historyPath,
     state: stateNow,
     recordRun: recordRun,
     hasSeen: hasSeen,
@@ -193,6 +270,8 @@ function createBiliStore(options) {
     seenLines: seenLines,
     appendReport: appendReport,
     appendDigest: appendDigest,
+    appendHistory: appendHistory,
+    recentHistory: recentHistory,
     reportPath: reportPath,
     stamp: function (date) { return stamp(date || clock()); },
     dayKey: function (date) { return dayKeyOf(date || clock()); },

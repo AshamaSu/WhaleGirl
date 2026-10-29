@@ -46,8 +46,8 @@ test('心情分档：边界值归到本档', function () {
 });
 
 test('delta 与数值都夹在合法区间', function () {
-  assert.strictEqual(clampDelta(99), 5);
-  assert.strictEqual(clampDelta(-99), -5);
+  assert.strictEqual(clampDelta(99), 8);
+  assert.strictEqual(clampDelta(-99), -8);
   assert.strictEqual(clampDelta('3'), 3);
   assert.strictEqual(clampDelta('x'), 0);
   assert.strictEqual(clampValue(-10), 0);
@@ -89,8 +89,10 @@ test('仓库：数值夹在 0~100，历史只留 24 小时内的', function () {
   assert.strictEqual(store.snapshot(24).value, 40, '不能低于 0（10*5 涨满后跌 12 次）');
 
   clock.advance(60 * 25);
-  assert.strictEqual(store.snapshot(24).history.length, 0, '25 小时前的记录不算进 24h 时间线');
-  assert.strictEqual(store.snapshot(48).history.length, 22);
+  const after = store.snapshot(24);
+  assert.strictEqual(after.history.length, 1, '25 小时前的记录不算进 24h，但回落会追加一条');
+  assert.strictEqual(after.value, 60, '低于基线时每小时 +1，收敛到 60 就停');
+  assert.strictEqual(store.snapshot(48).history.length, 23);
 });
 
 test('仓库：文件坏了就备份并从平静重来', function () {
@@ -117,7 +119,7 @@ test('解析判定结果：容忍代码块围栏与前后解释', function () {
     { delta: -2, reason: '被凶了' }
   );
   assert.deepStrictEqual(parseMoodReply('{"delta": "4", "reason": "聊得开心"}'), { delta: 4, reason: '聊得开心' });
-  assert.strictEqual(parseMoodReply('{"delta": 99}').delta, 5, '超出范围要夹回去');
+  assert.strictEqual(parseMoodReply('{"delta": 99}').delta, 8, '超出范围要夹回去');
   assert.strictEqual(parseMoodReply('我觉得她挺开心的'), null);
   assert.strictEqual(parseMoodReply('{"reason": "没给 delta"}'), null);
   assert.strictEqual(parseMoodReply(''), null);

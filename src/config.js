@@ -15,6 +15,46 @@ const DEFAULT_HOT_RELOAD = true;
 
 const MEMORY_KEYS = ['maxTurns', 'keepRecentTurns', 'factDecay', 'minStrength', 'maxFacts', 'maxPromptFacts', 'maxPromptChars'];
 
+/**
+ * 去掉 JSON 里的 // 与 /* *\/ 注释（JSONC）。
+ * 字符串内部的 // 不动（比如 https:// 开头的 URL），转义引号也按字符串处理。
+ */
+function stripJsonComments(text) {
+  const src = String(text == null ? '' : text);
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      while (i < src.length && src[i] !== '\n') i += 1;
+      out += '\n';
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i += 1;
+      i += 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /** 记忆参数只覆盖传进来的键，其余交给 memory.js 的默认值 */
 function pickMemorySettings(raw, warnings) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -91,7 +131,7 @@ function readJsonFile(filePath) {
     throw new ConfigError('读取配置文件失败：' + filePath + '（' + (err.code || err.message) + '）');
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(stripJsonComments(text.replace(/^\uFEFF/, '')));
   } catch (err) {
     throw new ConfigError('配置文件不是合法 JSON：' + filePath + '（' + err.message + '）');
   }
@@ -306,6 +346,7 @@ function describeProvider(provider) {
 }
 
 module.exports = {
+  stripJsonComments: stripJsonComments,
   ConfigError: ConfigError,
   loadConfig: loadConfig,
   resolveProvider: resolveProvider,

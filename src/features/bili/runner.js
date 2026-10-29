@@ -20,6 +20,32 @@ function parsePicked(report) {
   return found;
 }
 
+const ITEM_HEAD = /^###\s*(BV[0-9A-Za-z]{10})\s*$/;
+
+/** 把报告里的每个 ### BV 块拆成 {bvid,title,up,link}，供浏览历史与对话引用 */
+function parsePickedItems(report) {
+  const lines = String(report == null ? '' : report).split('\n');
+  const items = [];
+  let current = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    const head = ITEM_HEAD.exec(line);
+    if (head) {
+      current = { bvid: head[1], title: '', up: '', link: '' };
+      items.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (line.indexOf('标题：') === 0) current.title = line.slice(3).trim();
+    else if (line.indexOf('UP：') === 0) current.up = line.slice(3).trim();
+    else if (line.indexOf('链接：') === 0) current.link = line.slice(3).trim();
+  }
+  for (let i = 0; i < items.length; i += 1) {
+    if (!items[i].link) items[i].link = 'https://www.bilibili.com/video/' + items[i].bvid;
+  }
+  return items;
+}
+
 function triggerText(trigger) {
   return trigger === 'auto' ? '自动' : '手动';
 }
@@ -102,7 +128,7 @@ async function runBiliRound(options) {
     if (logger && typeof logger.log === 'function') {
       logger.log('[bili] ' + triggerText(trigger) + '一轮完成：挑中 ' + picked.length + ' 条，工具调用 ' + toolCalls + ' 次');
     }
-    return { ok: true, at: at, trigger: trigger, report: report, picked: picked, toolCalls: toolCalls, error: '' };
+    return { ok: true, at: at, trigger: trigger, report: report, picked: picked, items: parsePickedItems(report), toolCalls: toolCalls, error: '' };
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     report = sectionReport(header, '本轮失败：' + message);
@@ -110,7 +136,7 @@ async function runBiliRound(options) {
     store.recordRun({ auto: trigger === 'auto', ok: false, picked: 0, error: message });
 
     if (logger && typeof logger.warn === 'function') logger.warn('[bili] ' + triggerText(trigger) + '一轮失败：' + message);
-    return { ok: false, at: at, trigger: trigger, report: report, picked: [], toolCalls: toolCalls, error: message };
+    return { ok: false, at: at, trigger: trigger, report: report, picked: [], items: [], toolCalls: toolCalls, error: message };
   }
 }
 
@@ -163,6 +189,7 @@ function splitBubbles(text, max) {
 module.exports = {
   runBiliRound: runBiliRound,
   parsePicked: parsePicked,
+  parsePickedItems: parsePickedItems,
   buildUserMessage: buildUserMessage,
   buildAnnounceMessages: buildAnnounceMessages,
   splitBubbles: splitBubbles,

@@ -41,12 +41,14 @@
     background: rgba(255, 255, 255, 0.75);
   }
   .avatar {
+    position: relative;
     width: 40px; height: 40px; border-radius: 50%;
     display: grid; place-items: center;
     color: #fff; font-size: 18px; font-weight: 600;
     background: radial-gradient(circle at 32% 28%, #7fc0f0, var(--sea) 62%, var(--sea-deep));
     box-shadow: 0 4px 10px rgba(47, 127, 214, 0.28);
     flex: none;
+    transition: background 0.6s ease, box-shadow 0.6s ease, color 0.6s ease;
   }
   .who { display: flex; flex-direction: column; line-height: 1.35; flex: 1; min-width: 0; }
   .who b { font-size: 15px; letter-spacing: 0.5px; }
@@ -168,12 +170,25 @@
     background: rgba(255, 255, 255, 0.92);
     border: 1px solid var(--line); border-radius: 14px;
     box-shadow: 0 6px 18px rgba(31, 95, 168, 0.12);
+    transition: background 0.5s ease, border-color 0.5s ease;
   }
-  .mood-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
-  .mood-head span { font-size: 12px; color: var(--muted); }
-  .mood-head b { font-size: 18px; color: var(--sea-deep); font-variant-numeric: tabular-nums; }
+  .avatar.great::after {
+    content: '';
+    position: absolute; inset: -4px;
+    border-radius: 50%;
+    box-shadow: 0 0 14px rgba(245, 194, 75, 0.55);
+    animation: moodGlow 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes moodGlow { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.95; } }
+  @media (prefers-reduced-motion: reduce) { .avatar.great::after { animation: none; } }
+  .mood-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  #mood-label { font-size: 13px; color: var(--muted); }
+  .mood-head b { font-size: 15px; color: var(--sea-deep); opacity: 0.78; font-variant-numeric: tabular-nums; }
+  .mood-dots { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+  .mood-dots i { width: 4px; height: 4px; border-radius: 50%; background: rgba(47, 127, 214, 0.16); transition: background 0.4s ease; }
   .mood svg { width: 100%; height: 26px; display: block; }
-  .mood-hint { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mood-hint { font-size: 11px; color: var(--muted); white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
   @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   @keyframes blink { 50% { opacity: 0; } }
   @media (max-width: 560px) {
@@ -220,8 +235,13 @@
 </div>
 
 <div class="mood hidden" id="mood">
-  <div class="mood-head"><span id="mood-label">平静</span><b id="mood-value">60</b></div>
+  <div class="mood-head">
+    <span id="mood-label">平静</span>
+    <span class="mood-dots" id="mood-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    <b id="mood-value">60</b>
+  </div>
   <svg viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+    <polygon id="mood-fill" fill="#2F7FD6" opacity="0.1" points=""></polygon>
     <polyline id="mood-line" fill="none" stroke="#2f7fd6" stroke-width="1.6" stroke-linejoin="round" points="0,13 120,13"></polyline>
   </svg>
   <div class="mood-hint" id="mood-hint">最近没什么起伏</div>
@@ -250,6 +270,8 @@
   var moodLabelEl = document.getElementById('mood-label');
   var moodValueEl = document.getElementById('mood-value');
   var moodLineEl = document.getElementById('mood-line');
+  var moodFillEl = document.getElementById('mood-fill');
+  var moodDotsEl = document.getElementById('mood-dots');
   var moodHintEl = document.getElementById('mood-hint');
 
   var SESSION_KEY = 'whale_session';
@@ -364,12 +386,42 @@
     };
   }
 
+  // 心情表现全部由 /api/mood 的 display 决定：前端不再算任何色值
+  function applyMoodDisplay(mood) {
+    var display = (mood && mood.display) || {};
+    var accent = String(display.accent || '#2F7FD6');
+    var ink = String(display.ink || '#2B76C7');
+    var dots = Number(display.dots) || 3;
+    var great = display.id === 'great';
+
+    // 头像：身份蓝底不变，只换外环 / 光晕
+    avatarEl.style.background = 'radial-gradient(circle at 32% 28%, #7FC0F0, #2F7FD6 62%, #1F5FA8)';
+    avatarEl.style.boxShadow = '0 0 0 2px ' + accent + '73';
+    avatarEl.style.color = '#fff';
+    avatarEl.classList.toggle('great', great);
+
+    // 挂件：边框 / 底色 / 数值 / 曲线 / 档位点
+    moodEl.style.borderColor = accent + '38';
+    moodEl.style.background = 'linear-gradient(180deg, ' + accent + '0F, rgba(255,255,255,0.94))';
+    moodLabelEl.style.color = ink;
+    moodValueEl.style.color = ink;
+    moodLineEl.setAttribute('stroke', accent);
+    if (moodFillEl) moodFillEl.setAttribute('fill', accent + '1A');
+    if (moodDotsEl) {
+      var cells = moodDotsEl.children;
+      for (var i = 0; i < cells.length; i += 1) {
+        cells[i].style.background = i < dots ? accent : 'rgba(47,127,214,0.16)';
+      }
+    }
+  }
+
   /** 心情挂件：数值 + 近 24h 曲线，跟着 SSE 实时变 */
   function renderMood(mood) {
     if (!mood) return;
     moodEl.classList.remove('hidden');
-    moodLabelEl.textContent = mood.label || '平静';
+    moodLabelEl.textContent = (mood.display && mood.display.label) || mood.label || '平静';
     moodValueEl.textContent = typeof mood.value === 'number' ? String(mood.value) : '';
+    applyMoodDisplay(mood);
 
     var history = Array.isArray(mood.history) ? mood.history : [];
     var points = '0,13 120,13';
@@ -389,9 +441,9 @@
       }).join(' ');
     }
     moodLineEl.setAttribute('points', points);
+    if (moodFillEl) moodFillEl.setAttribute('points', points + ' 120,26 0,26');
 
-    var last = history[history.length - 1];
-    moodHintEl.textContent = last && last.reason ? last.reason : '最近没什么起伏';
+    moodHintEl.textContent = (mood.display && mood.display.hint) || '在水里漂着，挺好的';
   }
 
   function loadMood() {

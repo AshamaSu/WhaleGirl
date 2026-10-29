@@ -1,83 +1,161 @@
+// 本文件支持中文注释（// 行注释、/* 块注释 */），解析时会自动去掉。
+// 改完保存即生效；但 features.* 的启用状态要等下一次请求触发同步，参数改动需重启或关/开一次该能力。
+// 密钥不要写在这里：留空即从 .env 的 WG_* 读取。
 {
+  // 服务监听设置。默认只绑本机；要公网访问网页，必须先加登录鉴权。
   "server": {
+    // 监听地址：127.0.0.1 = 只有本机能访问
     "host": "127.0.0.1",
+    // 端口，默认 8787
     "port": 8787
   },
+  // 当前使用的模型服务商，对应下面 providers 里的键名
   "active": "deepseek",
+  // 人设文件路径（相对项目根）
   "persona": "personas/whale.json",
+  // 热加载：改配置/人设后下一句就生效；false 则需重启
   "hotReload": true,
+  // 单次模型请求超时（毫秒）
   "requestTimeoutMs": 60000,
+  // 主对话的代理参数
   "agent": {
+    // 一轮对话里最多调用几次工具
     "maxRounds": 4
   },
+  // 联网搜索（Tavily）
   "search": {
+    // 搜索接口地址
     "endpoint": "https://api.tavily.com/search",
+    // 每次返回几条结果
     "maxResults": 4
   },
+  // 图片理解
   "vision": {
+    // 用哪个服务商看图，该 provider 要配 visionModel
     "provider": "zhipu"
   },
+  // 能力开关：未声明 = 关闭。可写 true/false 简写，也能写完整对象。
   "features": {
-    "memory": { "enabled": false },
-    "mood": { "enabled": false },
+    // 记忆：短期对话 + 长期事实
+    "memory": {
+      // 是否启用记忆
+      "enabled": false
+    },
+    // 心情：每轮判定情绪变化，网页挂件展示
+    "mood": {
+      // 是否启用心情
+      "enabled": false
+    },
+    // 主动搭话（本期移出，配置保留，不排期）
     "speakUp": {
+      // 是否启用（本期保持 false）
       "enabled": false,
+      // 每次检查触发概率 0~1
       "probability": 0.15,
+      // 两次主动搭话的最小间隔（分钟）
       "cooldownMinutes": 60,
+      // 允许主动搭话的小时区间 [起, 止]，如 [9, 23]
       "activeHours": [9, 23],
+      // 安静时段，绝不打扰，如 [0, 7]
       "quietHours": [0, 7]
     },
+    // B站智能体：定时刷B站、挑视频、用自己的口吻分享
     "bili": {
+      // 是否启用（未声明=关闭）
       "enabled": false,
+      // 报告与章程里对主人的称呼
       "owner": "主人",
+      // 自动触发间隔（分钟），默认 180；手动触发不受限
       "intervalMinutes": 180,
+      // 每日自动轮数上限；手动轮不计入，0=不自动跑
       "dailyQuota": 4,
+      // 允许自动触发的时段，如 12:00-14:00、18:00-09:00（可跨夜）
       "activeWindows": ["12:00-14:00", "18:00-09:00"],
+      // 周末是否全天可触发
       "weekendAllDay": true,
+      // 兴趣关键词，空数组=按大众口味挑
       "keywords": [],
+      // 每轮最多挑几条进报告
       "itemsPerRound": 3,
+      // 候选视频的最低播放量
       "minPlays": 5000,
+      // 只看最近几天的视频
       "maxDaysOld": 14,
+      // 子代理最多工具轮次，防跑飞烧钱
       "maxRounds": 8,
+      // 是否把她口吻的播报推出来；false 只落报告
       "announce": true
     },
+    // QQ 群聊智能体（未来独立仓库，配置位先留着）
     "qq": {
+      // 是否启用
       "enabled": false,
+      // 接入模式：http（OneBot 11 HTTP）
       "mode": "http",
+      // OneBot 实现（如 NapCat）的地址
       "httpUrl": "http://127.0.0.1:3000",
+      // OneBot 的 token，没有就留空
       "accessToken": "",
+      // 群白名单；不在名单里的群完全静默
       "allowedGroups": []
     }
   },
+  // 记忆参数：条数、衰减与注入上限
   "memory": {
+    // 超过这么多条原始对话就压缩成摘要
     "maxTurns": 40,
+    // 压缩后保留多少条原文
     "keepRecentTurns": 12,
+    // 每条事实每轮衰减系数，0.97 = 每轮乘 0.97
     "factDecay": 0.97,
+    // 低于这个强度的事实被淘汰（置顶不受影响）
     "minStrength": 0.15,
+    // 最多保留多少条事实
     "maxFacts": 40,
+    // 每轮最多注入多少条事实
     "maxPromptFacts": 12,
+    // 注入记忆的字符上限
     "maxPromptChars": 1200
   },
+  // 模型服务商列表；apiKey 留空即从 .env 的 WG_*_API_KEY 读取
   "providers": {
+    // DeepSeek（OpenAI 兼容）
     "deepseek": {
+      // 接口地址，需以 /v1 结尾
       "baseUrl": "https://api.deepseek.com/v1",
+      // 留空，从 .env 读
       "apiKey": "",
+      // 对话模型名
       "chatModel": "deepseek-chat",
+      // 看图模型名，空=不支持看图
       "visionModel": "",
+      // 采样温度，越大越发散
       "temperature": 1.1
     },
+    // 智谱 GLM（备用/看图）
     "zhipu": {
+      // 接口地址
       "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      // 留空，从 .env 读
       "apiKey": "",
+      // 对话模型名
       "chatModel": "glm-4-flash",
+      // 看图模型名
       "visionModel": "glm-4v-flash",
+      // 采样温度
       "temperature": 1.0
     },
+    // 本地/自建（OpenAI 兼容，如 Ollama）
     "custom": {
+      // 接口地址
       "baseUrl": "http://127.0.0.1:11434/v1",
+      // 本地服务通常随便填
       "apiKey": "ollama",
+      // 对话模型名
       "chatModel": "qwen2.5:7b",
+      // 看图模型名，空=不支持
       "visionModel": "",
+      // 采样温度
       "temperature": 1.0
     }
   }

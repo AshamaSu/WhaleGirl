@@ -53,6 +53,31 @@ function normalizeSection(raw) {
   };
 }
 
+const HISTORY_PROMPT_LIMIT = 5;
+const HISTORY_PROMPT_DAYS = 7;
+
+/** 拼给主对话的「最近看过」片段；没有历史就返回空串（feature 宿主会跳过空片段） */
+function historyPrompt(store) {
+  if (!store || typeof store.recentHistory !== 'function') return '';
+  let items = [];
+  try {
+    items = store.recentHistory(HISTORY_PROMPT_LIMIT, HISTORY_PROMPT_DAYS);
+  } catch (err) {
+    return '';
+  }
+  if (!items || items.length === 0) return '';
+  const lines = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i] || {};
+    const day = String(item.date || '').slice(5);
+    const up = item.up ? '（UP：' + item.up + '）' : '';
+    lines.push('- ' + (day ? day + ' ' : '') + '《' + (item.title || item.bvid) + '》' + up + ' ' + (item.link || ''));
+  }
+  return [
+    '【你最近在 B 站看过的东西（主人问起时照这个说，没看过的不许编）】',
+  ].concat(lines).join('\n');
+}
+
 /**
  * 能力模块：B站 子代理（config.features.bili）。
  *
@@ -155,6 +180,9 @@ function createBiliModule(options) {
             timeoutMs: live.requestTimeoutMs,
           });
           lastResult = result;
+          if (result.ok && Array.isArray(result.items) && result.items.length > 0) {
+            store.appendHistory(result.items, { at: result.at, trigger: result.trigger });
+          }
           ctx.bus.emit('bili-report', { report: result.report, picked: result.picked, ok: result.ok });
           if (result.ok) {
             result.bubbles = await announce(result);
@@ -205,6 +233,10 @@ function createBiliModule(options) {
         ctx.sendJson(res, 202, { ok: true, started: true });
       });
 
+      if (typeof ctx.addPromptBlock === 'function') {
+        ctx.addPromptBlock(function () { return historyPrompt(store); });
+      }
+
       timer = setInterval(tick, TICK_MS);
       if (timer && typeof timer.unref === 'function') timer.unref();
 
@@ -225,5 +257,6 @@ function createBiliModule(options) {
 module.exports = {
   createBiliModule: createBiliModule,
   normalizeSection: normalizeSection,
+  historyPrompt: historyPrompt,
   TICK_MS: TICK_MS,
 };
