@@ -187,3 +187,27 @@ test('truncate 超长结果加提示', function () {
   assert.strictEqual(truncate('short', 10), 'short');
 });
 
+
+test('模型把工具调用写成 DSML 文本时：只有标记就报错，有正文就剥掉标记', async function () {
+  const NL = String.fromCharCode(10);
+  const onlyMarkup = scripted([[text('<｜｜DSML｜｜ calls>'), text('<｜｜DSML｜｜ invoke name="bili_subtitle">'), finish('stop')]]);
+  await assert.rejects(run({ streamer: onlyMarkup }), /DSML/);
+
+  const withProse = scripted([[text('先说结论：这条不错。'), text(NL + '<｜｜DSML｜｜ calls>' + NL + '<｜｜DSML｜｜ invoke name="x">'), finish('stop')]]);
+  const events = await run({ streamer: withProse });
+  const final = events.filter(function (e) { return e.type === 'final'; })[0];
+  assert.strictEqual(final.text, '先说结论：这条不错。');
+  assert.ok(final.text.indexOf('DSML') === -1);
+});
+
+test('轮数用尽时会追加「不要再调用工具」的提示', async function () {
+  const streamer = scripted([
+    [toolCall('c1', 'no_such_tool', '{}'), finish('tool_calls')],
+    [text('好'), finish('stop')],
+  ]);
+  await run({ streamer: streamer, extra: { maxRounds: 1 } });
+  const second = streamer.calls[1].messages;
+  const last = second[second.length - 1];
+  assert.strictEqual(last.role, 'user');
+  assert.match(last.content, /不要再调用/);
+});

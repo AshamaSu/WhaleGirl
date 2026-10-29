@@ -53,6 +53,15 @@ function truncate(text, limit) {
   return value.slice(0, limit) + '\n…（结果过长已截断，共 ' + value.length + ' 字）';
 }
 
+/** 模型有时把工具调用写成文本（DeepSeek 的 DSML 标记），这里剥掉；只剩标记就视为本轮失败 */
+const DSML_BLOCK = /<｜｜DSML｜｜\s*calls>[\s\S]*?<\/｜｜DSML｜｜\s*calls>/g;
+const DSML_TAG = /<\/?｜｜DSML｜｜[^>]*>/g;
+
+function stripToolMarkup(text) {
+  const raw = String(text == null ? '' : text);
+  const cleaned = raw.replace(DSML_BLOCK, '').replace(DSML_TAG, '').trim();
+  return { text: cleaned, hadMarkup: cleaned !== raw.trim() };
+}
 /**
  * 跑一轮完整对话（可能包含多次工具往返）。
  * yield:
@@ -100,6 +109,12 @@ async function* runAgent(options) {
     }
 
     if (!calls || calls.length === 0) {
+      const cleaned = stripToolMarkup(text);
+      if (cleaned.hadMarkup) {
+        if (cleaned.text === '') throw new Error('模型返回了未解析的工具调用（DSML），本轮没有可用回复');
+        yield { type: 'final', text: cleaned.text, rounds: round + 1, stripped: true };
+        return;
+      }
       yield { type: 'final', text: text, rounds: round + 1 };
       return;
     }
@@ -143,7 +158,8 @@ async function* runAgent(options) {
     if (opts.onRound) opts.onRound(round + 1, messages);
   }
 
-  // 轮数用尽还在要工具：不再给工具，逼它用自己的话回答
+  // 轮数用尽还在要工具：不再给工具，明确要求直接给结论（否则 DeepSeek 会用 DSML 文本再要一次）
+  messages.push({ role: 'user', content: '（工具调用次数已经用完，不要再调用任何工具，直接用中文给出最终结论，不要输出工具调用标记。）' });
   let text = '';
   const finalStream = streamer({
     provider: provider,
@@ -158,6 +174,12 @@ async function* runAgent(options) {
       yield { type: 'text', text: event.text };
     }
   }
+  const cleanedFinal = stripToolMarkup(text);
+  if (cleanedFinal.hadMarkup) {
+    if (cleanedFinal.text === '') throw new Error('模型返回了未解析的工具调用（DSML），本轮没有可用回复');
+    yield { type: 'final', text: cleanedFinal.text, rounds: maxRounds + 1, stripped: true };
+    return;
+  }
   yield { type: 'final', text: text, rounds: maxRounds + 1 };
 }
 
@@ -167,5 +189,6 @@ module.exports = {
   toolSchemas: toolSchemas,
   safeParseArgs: safeParseArgs,
   truncate: truncate,
+  stripToolMarkup: stripToolMarkup,
   DEFAULT_MAX_ROUNDS: DEFAULT_MAX_ROUNDS,
 };

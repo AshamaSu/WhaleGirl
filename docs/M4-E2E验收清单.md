@@ -120,7 +120,7 @@ curl -s localhost:8787/api/features/bili/state | python3 -m json.tool
 |---|---|---|---|
 | T01 | ✅ 通过 | enabled/login=true、running=false、seen=2、dayRounds=0 | 2026-10-29 15:0x |
 | T02 | ✅ 通过 | 首次 202，紧接第二次 409；一轮约 40s | 15:11 |
-| T03 | 🟡 部分 | 两轮正常（3 条 `### BV`、字段齐、链接可点）；另两轮模型把工具调用写成 DSML，报告不可读 | DSML 已加兜底，见 INC-001；脏段已备份并从 `out/` 移除 |
+| T03 | 🟡 部分 | 两轮正常（3 条 `### BV`、字段齐、链接可点）；另两轮模型把工具调用写成 DSML，报告不可读 | DSML 已双层兜底（agent + runner），见 INC-001；脏段已备份并从 `out/` 移除 |
 | T04 | ✅ 通过 | SSE 抓到 2 条 push：「我刚在那边游了一圈…」+ 带链接那条；≤3 条 | 15:15 那轮 |
 | T05 | ✅ 通过 | seen 2→5→8→10，两轮 picked 无重复 BV | — |
 | T06 | 🟡 部分 | `dailyQuota=0` 时 75s 无自动触发；手动仍受理 202 并执行 | 当轮命中 DSML 缺陷 0 入选；额度已改回 4 |
