@@ -63,6 +63,7 @@ function tableFor(calls) {
     if (url.indexOf('/x/v3/fav/folder/created/list-all') !== -1) return { code: 0, data: { list: [{ id: 7, title: '默认收藏夹' }] } };
     if (method === 'POST' && url.indexOf('/x/v2/reply/add') !== -1) return { code: 0, data: { rpid: 999 } };
     if (method === 'POST' && url.indexOf('/x/v2/reply/action') !== -1) return { code: 0, data: {} };
+    if (url.indexOf('/x/web-interface/card') !== -1) return { code: 0, data: { card: { mid: 9973677, name: '跃动的金币' } } };
     if (url.indexOf('/x/relation/followings') !== -1) {
       return { code: 0, data: { list: [{ mid: 9973677, uname: '主人', sign: '喵' }, { mid: 5, uname: '路人', sign: '' }] } };
     }
@@ -299,6 +300,36 @@ function toolByName(tools, name) {
   if (!hit) throw new Error('找不到工具 ' + name);
   return hit;
 }
+
+test('masterNickname 取主人昵称', async function () {
+  const fetchImpl = makeFetch(tableFor());
+  const api = createBiliApi(newClient(fetchImpl), {});
+  const name = await api.masterNickname({ vmid: 9973677 });
+  assert.equal(name, '跃动的金币');
+  // 第二次走缓存，不再发请求
+  const before = fetchImpl.calls.length;
+  await api.masterNickname({ vmid: 9973677 });
+  assert.equal(fetchImpl.calls.length, before);
+});
+
+test('bili_comment 楼中楼自动加「回复 @昵称 : 」前缀，回谁写谁', async function () {
+  const fetchImpl = makeFetch(tableFor());
+  const api = createBiliApi(newClient(fetchImpl), {});
+  const budget = fakeBudget();
+  const tools = createBiliTools(api, { interact: { enabled: true }, budget: budget, masterMid: '9973677' });
+
+  await toolByName(tools, 'bili_comment').execute({
+    aid: 43660166,
+    message: '主人好呀～',
+    rootRpid: 322274546432,
+    parentRpid: 318557538337,
+    atName: '跃动的金币',
+  });
+  const call = fetchImpl.calls.filter(function (entry) { return entry.url.indexOf('/v2/reply/add') !== -1; })[0];
+  const body = decodeURIComponent(call.body);
+  assert.match(body, /回复 @跃动的金币 : 主人好呀～/);
+  assert.match(body, /parent=318557538337/);
+});
 
 test('额度用完时写工具直接拒绝，不打接口', async function () {
   const fetchImpl = makeFetch(tableFor());

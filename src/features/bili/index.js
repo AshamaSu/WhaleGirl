@@ -220,6 +220,12 @@ function createBiliModule(options) {
         try {
           const live = ctx.getConfig();
           const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
+          // 主人的 B站 昵称：浏览轮里想@主人时用；拿不到就传提示语，章程里自己绕开
+          const masterMid = typeof client.mid === 'function' ? client.mid() : '';
+          let ownerBiliName = '';
+          if (masterMid !== '' && typeof api.masterNickname === 'function') {
+            ownerBiliName = await api.masterNickname({ vmid: masterMid }).catch(function () { return ''; });
+          }
           const result = await runBiliRound({
             root: ctx.root,
             store: store,
@@ -229,6 +235,7 @@ function createBiliModule(options) {
             logger: logger,
             now: clock,
             runAgent: runAgent,
+            ownerBiliName: ownerBiliName,
             timeoutMs: live.requestTimeoutMs,
           });
           lastResult = result;

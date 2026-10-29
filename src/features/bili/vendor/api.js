@@ -299,6 +299,19 @@ function createBiliApi(client, options) {
     }).filter(function (item) { return item.id !== '' && item.oid > 0; });
   }
 
+  /** 主人的 B站 昵称（@ 他用）。card 接口公开，六小时缓存 */
+  let masterNameCache = { name: '', at: 0 };
+  async function masterNickname(params) {
+    const vmid = Number(params && params.vmid) || 0;
+    if (!vmid) throw new BiliError('masterNickname 需要 vmid', 0);
+    const nowMs = clock().getTime();
+    if (masterNameCache.name && nowMs - masterNameCache.at < 6 * 3600 * 1000) return masterNameCache.name;
+    const data = await client.get('/x/web-interface/card', { mid: vmid });
+    const name = String((data && data.card && data.card.name) || (data && data.name) || '').trim();
+    if (name !== '') masterNameCache = { name: name, at: nowMs };
+    return name;
+  }
+
   // ===== 写操作（#3：互动）。都要求登录，csrf 由 client.post 统一带 =====
 
   /** 给视频点赞（like=1）。已经点过赞的接口会报错，调用方把错误翻译给人话 */
@@ -401,6 +414,7 @@ function createBiliApi(client, options) {
     comments: comments,
     followings: followings,
     masterDynamics: masterDynamics,
+    masterNickname: masterNickname,
     msgfeedReplies: msgfeedReplies,
     likeVideo: likeVideo,
     coin: coin,

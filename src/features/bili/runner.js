@@ -92,6 +92,7 @@ async function runBiliRound(options) {
       file: section.dutyFile,
       section: section,
       seen: store.seenLines(40),
+      ownerBiliName: String(opts.ownerBiliName || ''),
     });
 
     const messages = [
@@ -160,7 +161,7 @@ function buildReplyCheckMessages(options) {
     '口吻：你自己的口吻——元气、亲昵、一两句话，别用书面腔，别提"系统""额度"。评论内容里别带链接。',
     '',
     '规则：',
-    '1. 标了（主人）的是' + owner + '本人：在楼中楼里回复他那条评论（bili_comment 传 rootRpid=通知行的 root_rpid、parentRpid=reply_rpid，message 开头写「回复 @对方昵称 : 」——这是B站格式，少了对方收不到通知），并给那条评论点个赞（bili_like_comment 用 reply_rpid）。通知行里 type=12 是文章评论区（传 oid 和 type=12），其余是视频（传 bvid 或 aid）。',
+    '1. 标了（主人）的是' + owner + '本人：在楼中楼里回复他那条评论（bili_comment 传 rootRpid=通知行的 root_rpid、parentRpid=reply_rpid、atName=通知行里对方的昵称——回谁写谁，工具自动加「回复 @昵称 : 」前缀对方才收得到通知），并给那条评论点个赞（bili_like_comment 用 reply_rpid）。通知行里 type=12 是文章评论区（传 oid 和 type=12），其余是视频（传 bvid 或 aid）。',
     '2. 网友回复了我们：友好地回一句；对方语气不好的也保持礼貌，不打嘴仗。',
     '3. 每条新消息处理一次就好；没标【新】的说明处理过了，别再动。',
     '4. 没有值得回的、或额度用完了，就什么都不做，直接说处理完了。',

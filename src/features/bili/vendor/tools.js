@@ -369,12 +369,18 @@ function createBiliTools(api, options) {
           message: { type: 'string', description: '评论内容，小鲸的口吻，一两句话' },
           rootRpid: { type: 'number', description: '楼中楼时填楼层的根 rpid（通知行里的 root_rpid），直接评论就别填' },
           parentRpid: { type: 'number', description: '楼中楼里回复某条具体评论时填对方的 rpid（通知行里的 reply_rpid）；不填=回复楼层根' },
+          atName: { type: 'string', description: '楼中楼回复某人时填对方昵称（通知行里的名字，回谁写谁），工具会自动加「回复 @昵称 : 」前缀让对方收到通知' },
         },
         required: ['message'],
       },
       execute: async function (args) {
-        const message = String(args.message || '').trim();
+        let message = String(args.message || '').trim();
         if (message === '') return '评论内容是空的，没发。';
+        // B站楼中楼格式：回复谁就带谁的前缀，对方才收得到通知。名字来自通知数据，回谁写谁
+        const atName = String(args.atName || '').trim();
+        if (Number(args.parentRpid) > 0 && atName !== '' && message.indexOf('回复 @') !== 0) {
+          message = '回复 @' + atName + ' : ' + message;
+        }
         const hasBvid = /^BV[0-9A-Za-z]{10}$/.test(String(args.bvid || '').trim());
         const type = Number(args.type) === 12 ? 12 : 1;
         const oid = Number(args.oid) || 0;
