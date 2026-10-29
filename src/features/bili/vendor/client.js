@@ -220,7 +220,9 @@ function createBiliClient(options) {
     const source = params && typeof params === 'object' ? Object.assign({}, params) : {};
     source.csrf = auth.biliJct;
     const body = buildQuery(source);
-    const result = await requestUrl(urlOf(pathname, ''), {
+    // 动态发布等接口在别的子域（api.vc.bilibili.com），支持传绝对地址
+    const url = /^https?:\/\//i.test(pathname) ? pathname : urlOf(pathname, '');
+    const result = await requestUrl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', origin: 'https://www.bilibili.com', referer: 'https://www.bilibili.com/' },
       body: body,

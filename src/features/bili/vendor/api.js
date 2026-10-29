@@ -233,7 +233,8 @@ function createBiliApi(client, options) {
     const vmid = Number(p.vmid) > 0 ? Number(p.vmid) : 0;
     if (!vmid) throw new BiliError('masterDynamics 需要 vmid（主人的 mid）', 0);
 
-    const data = await client.get('/x/polymer/web-dynamic/v1/feed', { host_mid: vmid });
+    // 该接口 2026-10 起要求 wbi 签名，匿名 get 会 404
+    const data = await client.getSigned('/x/polymer/web-dynamic/v1/feed', { host_mid: vmid });
     const items = data && data.items && Array.isArray(data.items) ? data.items : [];
     const out = [];
     for (let i = 0; i < items.length && out.length < 20; i += 1) {
@@ -397,6 +398,24 @@ function createBiliApi(client, options) {
     return data && Number(data.rpid) > 0 ? { rpid: Number(data.rpid) } : { rpid: 0 };
   }
 
+  /**
+   * 发文字动态（成长记录/碎碎念）。老版 dynamic_svr 端点最稳：
+   * type=4 纯文字，rid=0。发布成功返回动态 id。
+   */
+  async function createTextDynamic(params) {
+    const content = String(params && params.content == null ? '' : params.content).trim();
+    if (content === '') throw new BiliError('动态内容不能为空', 0);
+    if (content.length > 1000) throw new BiliError('动态太长（' + content.length + ' 字），压到 1000 字以内', 0);
+    const data = await client.post('https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/create', {
+      type: 4,
+      rid: 0,
+      content: content,
+    });
+    // 大整数会丢精度，*_str 才是准的
+    const dynId = String((data && (data.dynamic_id_str || data.dyn_id_str || data.dynamic_id || data.dyn_id)) || '');
+    return { dynId: dynId };
+  }
+
   /** 给评论点赞（action=1）；用来给主人的留言捧场。文章评论传 type=12 */
   async function likeComment(params) {
     const p = params || {};
@@ -422,6 +441,7 @@ function createBiliApi(client, options) {
     triple: triple,
     favorite: favorite,
     reply: reply,
+    createTextDynamic: createTextDynamic,
     likeComment: likeComment,
   };
 }
