@@ -1,97 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>插件参数</title>
+<style>
+  :root { --sea: #2f7fd6; --ink: #1d2b3a; --muted: #7b8fa3; --line: #dbe7f1; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 18px 60px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: linear-gradient(160deg, #eaf4fb 0%, #f6fbfe 45%, #e6f1f9 100%);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header a { font-size: 13px; color: var(--sea); text-decoration: none; }
+  .card {
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px 18px;
+    box-shadow: 0 4px 14px rgba(31, 95, 168, 0.06);
+  }
+  .card h2 { font-size: 15px; margin: 0; display: flex; align-items: center; gap: 10px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.on { color: #2c7a55; border-color: #bfe0cf; background: #effaf4; }
+  .badge.off { color: #a33a3a; border-color: #f3c9c9; background: #fdf3f3; }
+  .card p.tip { font-size: 12px; color: var(--muted); margin: 6px 0 12px; }
+  .params { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .param { display: flex; flex-direction: column; }
+  .param.wide { grid-column: 1 / -1; }
+  label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  label .key { font-family: ui-monospace, Menlo, monospace; opacity: 0.75; }
+  input[type=text], input[type=number], textarea {
+    width: 100%; border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 11px; font: inherit; font-size: 14px; color: var(--ink);
+    background: #fff; outline: none;
+  }
+  input:focus, textarea:focus { border-color: #a9cdec; box-shadow: 0 0 0 3px rgba(47, 127, 214, 0.12); }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; min-height: 66px; }
+  .desc { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  button {
+    border: 0; border-radius: 10px; padding: 8px 16px; font: inherit; font-size: 13px;
+    color: #fff; background: linear-gradient(180deg, #4a92dd, var(--sea)); cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .status { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  .status.ok { color: #2c7a55; }
+  .status.bad { color: #a33a3a; }
+  .toggle { position: relative; width: 44px; height: 24px; border-radius: 999px; border: 1px solid var(--line); background: #e7eef5; cursor: pointer; transition: background 0.2s; flex: none; }
+  .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: left 0.2s; }
+  .toggle.on { background: var(--sea); }
+  .toggle.on::after { left: 22px; }
+  .err { font-size: 12px; color: #a33a3a; margin-top: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>插件参数面板</h1>
+    <a href="/">← 回对话</a>
+  </header>
+  <div id="list" class="wrap" style="gap:16px;"></div>
+</div>
+<script>
 'use strict';
+var state = {};
 
-const test = require('node:test');
-const assert = require('node:assert');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-
-const { patchFeatureSection, stripComments } = require('../src/config-edit');
-
-function tmpRoot(jsonc) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-edit-'));
-  fs.writeFileSync(path.join(root, 'config.json'), jsonc, { mode: 0o600 });
-  return root;
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-const BASE = [
-  '{',
-  '  // 顶层注释不能丢',
-  '  "active": "deepseek",',
-  '  "features": {',
-  '    // bili 注释也不能丢',
-  '    "bili": {',
-  '      // 是否启用',
-  '      "enabled": true,',
-  '      "intervalMinutes": 180, // 行内注释保留',
-  '      "activeWindows": ["12:00-14:00", "18:00-09:00"],',
-  '      "interact": {',
-  '        "enabled": true,',
-  '        "maxLikes": 10',
-  '      }',
-  '    }',
-  '  }',
-  '}',
-].join('\n');
+function badge(enabled) {
+  return el('span', 'badge ' + (enabled ? 'on' : 'off'), enabled ? '已启用' : '已关闭');
+}
 
-test('改顶层 key：注释全保留，其余值不动', function () {
-  const root = tmpRoot(BASE);
-  const result = patchFeatureSection(root, 'bili', { intervalMinutes: 90 });
-  assert.equal(result.ok, true);
-  const text = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
-  assert.match(text, /\/\/ 顶层注释不能丢/);
-  assert.match(text, /\/\/ bili 注释也不能丢/);
-  assert.match(text, /"intervalMinutes": 90, \/\/ 行内注释保留/);
-  assert.equal(result.applied.intervalMinutes, 90);
-  assert.equal(result.applied.activeWindows[0], '12:00-14:00');
-});
+function renderCard(name, info) {
+  var card = el('div', 'card');
+  var head = el('h2');
+  head.appendChild(el('span', null, name));
+  head.appendChild(badge(info.enabled));
+  card.appendChild(head);
+  card.appendChild(el('p', 'tip', info.error ? '异常：' + info.error : '参数由插件自身提供（接口契约见插件 http.js）'));
 
-test('嵌套 key（interact.maxLikes）与布尔值', function () {
-  const root = tmpRoot(BASE);
-  const result = patchFeatureSection(root, 'bili', { 'interact.maxLikes': 3, weekendAllDay: false });
-  assert.equal(result.ok, true);
-  assert.equal(result.applied.interact.maxLikes, 3);
-  assert.equal(result.applied.weekendAllDay, false);
-  const text = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
-  assert.match(text, /"maxLikes": 3/);
-  assert.match(text, /\/\/ 是否启用/);
-});
+  var toggle = el('div', 'toggle' + (info.enabled ? ' on' : ''));
+  toggle.title = '点击切换开关';
+  toggle.onclick = function () {
+    toggle.style.pointerEvents = 'none';
+    fetch('/api/features/' + name + '/enabled', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: !info.enabled }),
+    }).then(function (r) { return r.json(); }).then(function (body) {
+      if (body.ok) location.reload();
+      else { toggle.style.pointerEvents = ''; alert('切换失败：' + (body.error || '未知错误')); }
+    }).catch(function (e) { toggle.style.pointerEvents = ''; alert('请求失败：' + e.message); });
+  };
+  head.appendChild(toggle);
 
-test('段里缺的 key 会追加，且 JSON 仍合法', function () {
-  const root = tmpRoot(BASE);
-  const result = patchFeatureSection(root, 'bili', { 'interact.maxReplies': 5, owner: '主人' });
-  assert.equal(result.ok, true);
-  assert.equal(result.applied.interact.maxReplies, 5);
-  assert.equal(result.applied.owner, '主人');
-  // 追加后整段还能被标准 parse（尾逗号正确）
-  const parsed = JSON.parse(stripComments(fs.readFileSync(path.join(root, 'config.json'), 'utf8')));
-  assert.equal(parsed.features.bili.enabled, true);
-});
+  if (!info.enabled) return card;
 
-test('段缺失时自动创建最小段', function () {
-  const root = tmpRoot('{\n  "features": {\n    "mood": {\n      "enabled": false\n    }\n  }\n}');
-  const result = patchFeatureSection(root, 'speakUp', { enabled: true, probability: 0.2 });
-  assert.equal(result.ok, true);
-  assert.equal(result.applied.enabled, true);
-  assert.equal(result.applied.probability, 0.2);
-  // 原有 mood 段不受影响
-  assert.equal(result.applied_mood_check, undefined);
-  const parsed = JSON.parse(stripComments(fs.readFileSync(path.join(root, 'config.json'), 'utf8')));
-  assert.equal(parsed.features.mood.enabled, false);
-});
+  var status = el('div', 'status');
+  var errBox = el('div', 'err hidden');
 
-test('数组值整体替换', function () {
-  const root = tmpRoot(BASE);
-  const result = patchFeatureSection(root, 'bili', { activeWindows: ['09:00-12:00'] });
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.applied.activeWindows, ['09:00-12:00']);
-});
+  fetch('/api/features/' + name + '/params').then(function (r) {
+    if (r.status === 404) return null;
+    return r.json();
+  }).then(function (data) {
+    if (!data || !data.ok) return;
+    state[name] = { section: data.section };
+    var grid = el('div', 'params');
+    (data.params || []).forEach(function (spec) {
+      spec._plugin = name;
+      var box = el('div', 'param' + (spec.type === 'strings' ? ' wide' : ''));
+      var label = el('label');
+      label.appendChild(el('span', null, spec.label + ' '));
+      label.appendChild(el('span', 'key', spec.key));
+      box.appendChild(label);
 
-test('写回会产生非法 JSON 时拒绝落盘', function () {
-  // 模拟方式：patch 里带无法序列化的内容不太可能，这里直接验证 API 正常路径下文件保持可解析
-  const root = tmpRoot(BASE);
-  const result = patchFeatureSection(root, 'bili', { dailyQuota: 2 });
-  assert.equal(result.ok, true);
-  const text = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
-  assert.doesNotThrow(function () { JSON.parse(stripComments(text)); });
+      var value = data.section;
+      var parts = spec.key.split('.');
+      for (var i = 0; i < parts.length; i++) value = value && value[parts[i]];
+      if (value === undefined) value = spec.default;
+
+      if (spec.type === 'boolean') {
+        var check = document.createElement('input');
+        check.type = 'checkbox';
+        check.checked = value === true;
+        check.dataset.key = spec.key;
+        box.appendChild(check);
+      } else if (spec.type === 'number') {
+        var num = document.createElement('input');
+        num.type = 'number';
+        if (spec.min !== undefined) num.min = spec.min;
+        if (spec.max !== undefined) num.max = spec.max;
+        num.value = value;
+        num.dataset.key = spec.key;
+        box.appendChild(num);
+      } else if (spec.type === 'strings') {
+        var area = document.createElement('textarea');
+        area.value = (value || []).join('\n');
+        area.dataset.key = spec.key;
+        box.appendChild(area);
+      } else {
+        var text = document.createElement('input');
+        text.type = 'text';
+        text.value = value === undefined ? '' : value;
+        text.dataset.key = spec.key;
+        box.appendChild(text);
+      }
+      if (spec.desc) box.appendChild(el('div', 'desc', spec.desc));
+      grid.appendChild(box);
+    });
+    card.appendChild(grid);
+
+    var actions = el('div', 'actions');
+    var save = el('button', null, '保存参数');
+    save.onclick = function () {
+      var patch = {};
+      var inputs = grid.querySelectorAll('[data-key]');
+      for (var i = 0; i < inputs.length; i++) {
+        var input = inputs[i];
+        var key = input.dataset.key;
+        var parts = key.split('.');
+        if (parts.length === 2) {
+          patch[parts[0]] = patch[parts[0]] || {};
+          patch[parts[0]][parts[1]] = specValue(input);
+        } else {
+          patch[key] = specValue(input);
+        }
+      }
+      function specValue(input) {
+        for (var j = 0; j < (data.params || []).length; j++) {
+          if (data.params[j].key === input.dataset.key) {
+            if (data.params[j].type === 'boolean') return input.checked;
+            if (data.params[j].type === 'number') return input.value === '' ? '' : Number(input.value);
+            if (data.params[j].type === 'strings') return input.value.split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+            return input.value;
+          }
+        }
+        return input.value;
+      }
+      save.disabled = true;
+      status.className = 'status';
+      status.textContent = '保存中…';
+      fetch('/api/features/' + name + '/params', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).then(function (r) { return r.json(); }).then(function (body2) {
+        save.disabled = false;
+        if (body2.ok) {
+          status.className = 'status ok';
+          status.textContent = '已保存并生效（写回 config.json，注释保留）';
+        } else {
+          status.className = 'status bad';
+          status.textContent = (body2.errors || ['保存失败']).join('\n');
+        }
+      }).catch(function (e) {
+        save.disabled = false;
+        status.className = 'status bad';
+        status.textContent = '请求失败：' + e.message;
+      });
+    };
+    actions.appendChild(save);
+    actions.appendChild(status);
+    card.appendChild(actions);
+    card.appendChild(errBox);
+  }).catch(function (e) {
+    card.appendChild(el('div', 'status bad', '参数接口不可用：' + e.message));
+  });
+
+  return card;
+}
+
+fetch('/api/health').then(function (r) { return r.json(); }).then(function (health) {
+  var list = document.getElementById('list');
+  var names = Object.keys(health.features || {}).sort();
+  if (names.length === 0) list.appendChild(el('div', 'card', '没有注册任何插件'));
+  names.forEach(function (name) {
+    list.appendChild(renderCard(name, health.features[name]));
+  });
+}).catch(function (e) {
+  document.getElementById('list').appendChild(el('div', 'card', '加载失败：' + e.message));
 });
+</script>
+</body>
+</html>
