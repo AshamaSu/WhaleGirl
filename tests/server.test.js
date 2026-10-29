@@ -507,3 +507,37 @@ test('配置读取失败时通过 SSE 报错而不是静默挂掉', async functi
   }
 });
 
+
+test('关闭能力后下一次请求就撤路由（不依赖别的请求触发 sync）', async function () {
+  const config = baseConfig({ features: { demo: { enabled: true } } });
+  const current = config;
+  const demo = {
+    name: 'demo',
+    enabled: function (c) { return !!(c && c.features && c.features.demo && c.features.demo.enabled); },
+    init: function (ctx) {
+      ctx.route('GET', '/api/demo', function (req, res) { ctx.sendJson(res, 200, { ok: true }); });
+      return { stop: function () {} };
+    },
+  };
+
+  const srv = await start(config, {
+    featureModules: [demo],
+    loadConfig: function () { return current; },
+    loadEnvFile: function () { return {}; },
+  });
+
+  try {
+    let res = await fetch(srv.base + '/api/demo');
+    assert.strictEqual(res.status, 200);
+
+    current.features.demo.enabled = false;
+    res = await fetch(srv.base + '/api/demo');
+    assert.strictEqual(res.status, 404, '关闭后旧路由必须立刻不可用');
+
+    current.features.demo.enabled = true;
+    res = await fetch(srv.base + '/api/demo');
+    assert.strictEqual(res.status, 200, '重新开启后路由恢复');
+  } finally {
+    await srv.close();
+  }
+});

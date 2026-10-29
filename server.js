@@ -19,6 +19,8 @@ const { loadEnvFile, withProcessEnv } = require('./src/env');
 const { createBus } = require('./src/events');
 const { createFeatureHost } = require('./src/features');
 
+const FEATURE_SYNC_MS = 5000;
+
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 4000;
 const MAX_IMAGE_CHARS = 3 * 1024 * 1024;
@@ -288,6 +290,19 @@ function createServer(config, deps) {
     modules: options.featureModules,
   });
   featureHost.sync(config);
+
+  /** 开关紧跟配置：路由匹配前对一次，另有 5s 定时兜底（没有请求时也能停掉被关闭的能力） */
+  function syncFeaturesNow() {
+    if (!featureHost) return;
+    try {
+      resolveLive();
+    } catch (err) {
+      logger.warn('[features] 同步开关状态失败：' + (err && err.message ? err.message : String(err)));
+    }
+  }
+
+  const featureSyncTimer = disableBackground ? null : setInterval(syncFeaturesNow, FEATURE_SYNC_MS);
+  if (featureSyncTimer && typeof featureSyncTimer.unref === 'function') featureSyncTimer.unref();
 
   async function handleChat(req, res) {
     if (req.method !== 'POST') {
@@ -594,7 +609,8 @@ function createServer(config, deps) {
       return;
     }
 
-    // 能力模块注册的路由（关掉的能力不会注册，也就不会命中）
+    // 先把开关状态对齐到最新配置，再匹配能力路由：否则关闭后旧路由仍会被命中
+    if (pathname.indexOf('/api/') === 0) syncFeaturesNow();
     const featureRoute = featureHost.matchRoute(req.method, pathname);
     if (featureRoute) {
       await featureRoute.handler(req, res, url);
@@ -691,6 +707,7 @@ function main() {
 
   const shutdown = function () {
     console.log('\n正在关闭…');
+    clearInterval(featureSyncTimer);
     try {
       server.features.stopAll();
     } catch (err) {
