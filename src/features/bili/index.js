@@ -228,7 +228,7 @@ function createBiliModule(options) {
             trigger: trigger === 'auto' ? 'auto' : 'manual',
             logger: logger,
             now: clock,
-            runAgent: opts.runAgent,
+            runAgent: runAgent,
             timeoutMs: live.requestTimeoutMs,
           });
           lastResult = result;
