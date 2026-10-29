@@ -365,7 +365,7 @@ function createBiliTools(api, options) {
           bvid: { type: 'string', description: 'BV 号（视频评论时填这个）' },
           aid: { type: 'number', description: '视频的 aid；只有通知里给 oid 没有 bvid 时用它' },
           oid: { type: 'number', description: '文章评论时填这个（通知里 type=12 的 oid，即 cv 号）' },
-          type: { type: 'number', description: '评论区类型：1=视频（默认），11=动态/图文，12=专栏文章（通知行里 type 是几就传几）' },
+          type: { type: 'number', description: '评论区类型：1=视频（默认），11=动态/图文，12=专栏文章，17=动态评论区（通知行里 type 是几就传几）' },
           message: { type: 'string', description: '评论内容，小鲸的口吻，一两句话' },
           rootRpid: { type: 'number', description: '楼中楼时填楼层的根 rpid（通知行里的 root_rpid），直接评论就别填' },
           parentRpid: { type: 'number', description: '楼中楼里回复某条具体评论时填对方的 rpid（通知行里的 reply_rpid）；不填=回复楼层根' },
@@ -382,7 +382,7 @@ function createBiliTools(api, options) {
           message = '回复 @' + atName + ' : ' + message;
         }
         const hasBvid = /^BV[0-9A-Za-z]{10}$/.test(String(args.bvid || '').trim());
-        const type = [1, 11, 12].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
+        const type = [1, 11, 12, 17].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
         const oid = Number(args.oid) || 0;
         const aid = Number(args.aid) || 0;
         if (!hasBvid && !aid && !oid) return 'bvid/aid/oid 都没有，发不出去。';
@@ -405,7 +405,7 @@ function createBiliTools(api, options) {
         properties: {
           oid: { type: 'number', description: '评论区 oid（视频是 aid，文章是 cv 号）' },
           rpid: { type: 'number', description: '评论的 rpid' },
-          type: { type: 'number', description: '1=视频（默认），11=动态/图文，12=专栏文章' },
+          type: { type: 'number', description: '1=视频（默认），11=动态/图文，12=专栏文章，17=动态评论区' },
         },
         required: ['oid', 'rpid'],
       },
@@ -414,10 +414,35 @@ function createBiliTools(api, options) {
         const rpid = Number(args.rpid) || 0;
         if (!oid || !rpid) return 'oid/rpid 不对，没点。';
         return runWrite('likes', 1, { bvid: String(rpid), detail: '给评论点赞 oid=' + oid }, async function () {
-          const commentType = [1, 11, 12].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
+          const commentType = [1, 11, 12, 17].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
           await api.likeComment({ oid: oid, rpid: rpid, type: commentType });
           return '评论点赞成功（rpid=' + rpid + '）';
         });
+      },
+    },
+    {
+      name: 'bili_post_dynamic',
+      description: '发一条文字动态（成长记录、今天遇到的新鲜事）。要有真实内容才发，用小鲸的口吻，别当流水账；一天有次数上限。',
+      parameters: {
+        type: 'object',
+        properties: {
+          content: { type: 'string', description: '动态正文，小鲸的口吻，几句话；只写真事' },
+        },
+        required: ['content'],
+      },
+      execute: async function (args) {
+        const content = String(args.content || '').trim();
+        if (content === '') return '动态内容是空的，没发。';
+        if (!interactEnabled) return '互动功能没开，跳过。';
+        if (!budget) return '额度服务没接上，跳过。';
+        if (budget.remaining('dynamics') < 1) return '今天发动态的额度用完了，这次没发。';
+        try {
+          const result = await api.createTextDynamic({ content: content });
+          budget.record('dynamics', 1, { bvid: '', detail: '动态：' + content.slice(0, 60) });
+          return result.dynId ? '动态发布成功（id=' + result.dynId + '）' : '动态发布成功';
+        } catch (err) {
+          return '没发出去（' + (err && err.message ? err.message : err) + '）。别重试。';
+        }
       },
     },
   ];

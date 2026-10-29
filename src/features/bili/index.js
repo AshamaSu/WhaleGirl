@@ -36,6 +36,7 @@ const PARAM_SPECS = [
   { key: 'interact.maxCoins', type: 'number', label: '每日投币上限（枚）', min: 0, max: 10, default: 2, desc: '' },
   { key: 'interact.maxFavorites', type: 'number', label: '每日收藏上限', min: 0, max: 20, default: 3, desc: '' },
   { key: 'interact.maxReplies', type: 'number', label: '每日评论/回复上限', min: 0, max: 50, default: 5, desc: '' },
+  { key: 'interact.maxDynamics', type: 'number', label: '每日发动态上限', min: 0, max: 10, default: 2, desc: '成长记录/碎碎念' },
 ];
 
 const SPEC_MAP = {};
@@ -68,9 +69,16 @@ function validateSpec(spec, value) {
  */
 function applyBiliParams(root, currentRaw, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, errors: ['请求体必须是对象'] };
+  // 契约兼容：面板可能发嵌套对象（{interact:{maxLikes:3}}）也可能发点路径（{'interact.maxLikes':3}），统一摊平成点路径
+  const flat = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [subKey, subValue] of Object.entries(value)) flat[key + '.' + subKey] = subValue;
+    } else flat[key] = value;
+  }
   const errors = [];
   const clean = {};
-  for (const [key, value] of Object.entries(patch)) {
+  for (const [key, value] of Object.entries(flat)) {
     if (key === 'enabled') {
       if (typeof value !== 'boolean') { errors.push('enabled 必须是 true/false'); continue; }
       clean.enabled = value;
@@ -156,6 +164,7 @@ function normalizeInteract(raw) {
     maxCoins: Math.max(0, num(src.maxCoins, 2)),
     maxFavorites: Math.max(0, num(src.maxFavorites, 3)),
     maxReplies: Math.max(0, num(src.maxReplies, 5)),
+    maxDynamics: Math.max(0, num(src.maxDynamics, 2)),
   };
 }
 

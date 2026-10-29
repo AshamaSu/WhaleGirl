@@ -80,7 +80,7 @@ function start(params) {
 test('specs 齐全：17 个参数，键含 interact 点路径', function () {
   const env = start();
   const specs = env.handle.specs();
-  assert.equal(specs.length, 17);
+  assert.equal(specs.length, 18);
   const keys = specs.map(function (spec) { return spec.key; });
   assert.ok(keys.indexOf('intervalMinutes') !== -1);
   assert.ok(keys.indexOf('interact.maxCoins') !== -1);

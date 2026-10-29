@@ -27,10 +27,10 @@ function emptyState() {
   return { dayKey: '', dayRounds: 0, lastRunAt: '', lastResult: null, interact: emptyInteract(), interactLog: [] };
 }
 
-const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies'];
+const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies', 'dynamics'];
 
 function emptyInteract() {
-  return { dayKey: '', likes: 0, coins: 0, favorites: 0, replies: 0 };
+  return { dayKey: '', likes: 0, coins: 0, favorites: 0, replies: 0, dynamics: 0 };
 }
 
 /** 互动日志最多留 50 条，够最近几天的提示与排查用 */
@@ -292,7 +292,7 @@ function createBiliStore(options) {
     const src = limits && typeof limits === 'object' ? limits : {};
     const current = stateNow().interact;
     const out = {};
-    const limitKeys = { likes: 'maxLikes', coins: 'maxCoins', favorites: 'maxFavorites', replies: 'maxReplies' };
+    const limitKeys = { likes: 'maxLikes', coins: 'maxCoins', favorites: 'maxFavorites', replies: 'maxReplies', dynamics: 'maxDynamics' };
     for (let i = 0; i < INTERACT_TYPES.length; i += 1) {
       const key = INTERACT_TYPES[i];
       const limit = Math.max(0, Math.round(Number(src[limitKeys[key]]) || 0));

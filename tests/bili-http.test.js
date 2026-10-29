@@ -24,7 +24,7 @@ function setup(overrides) {
     running: function () { return false; },
     replying: function () { return false; },
     lastResult: function () { return null; },
-    section: function () { return { interact: { enabled: true, maxLikes: 10, maxCoins: 2, maxFavorites: 3, maxReplies: 5 } }; },
+    section: function () { return { interact: { enabled: true, maxLikes: 10, maxCoins: 2, maxFavorites: 3, maxReplies: 5, maxDynamics: 2 } }; },
     state: function () { return store.state(); },
     seenCount: function () { return 3; },
     interact: function () { return { section: {}, budget: { likes: { used: 0, limit: 10, left: 10 } }, log: [] }; },

@@ -372,7 +372,7 @@ function createBiliApi(client, options) {
    * 发评论：root>0 时是楼中楼回复某人，parent 用对方 rpid。
    * type：1=视频（bvid/aid），11=动态/图文（oid=动态评论id），12=文章（oid=cv号）。
    */
-  const REPLY_TYPES = [1, 11, 12];
+  const REPLY_TYPES = [1, 11, 12, 17];
   async function reply(params) {
     const p = params || {};
     const message = String(p.message == null ? '' : p.message).trim();
@@ -422,7 +422,7 @@ function createBiliApi(client, options) {
     const oid = Number(p.oid) || 0;
     const rpid = Number(p.rpid) || 0;
     if (!oid || !rpid) throw new BiliError('likeComment 需要 oid 和 rpid', 0);
-    const type = [1, 11, 12].indexOf(Number(p.type)) !== -1 ? Number(p.type) : 1;
+    const type = [1, 11, 12, 17].indexOf(Number(p.type)) !== -1 ? Number(p.type) : 1;
     return client.post('/x/v2/reply/action', { oid: oid, type: type, rpid: rpid, action: 1 });
   }
 

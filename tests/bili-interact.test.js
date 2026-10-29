@@ -218,7 +218,7 @@ function tmpStore(now) {
 
 test('recordInteract 记账，interactBudget 按剩余算', function () {
   const store = tmpStore();
-  const limits = { maxLikes: 3, maxCoins: 2, maxFavorites: 1, maxReplies: 5 };
+  const limits = { maxLikes: 3, maxCoins: 2, maxFavorites: 1, maxReplies: 5, maxDynamics: 2 };
 
   store.recordInteract('likes', { bvid: 'BV1', detail: '测试' });
   store.recordInteract('coins', { bvid: 'BV1', detail: '投2枚' });
@@ -236,7 +236,7 @@ test('recordInteract 记账，interactBudget 按剩余算', function () {
 test('换天互动额度归零', function () {
   let fake = new Date('2026-10-29T10:00:00');
   const store = tmpStore(function () { return fake; });
-  const limits = { maxLikes: 3, maxCoins: 2, maxFavorites: 3, maxReplies: 5 };
+  const limits = { maxLikes: 3, maxCoins: 2, maxFavorites: 3, maxReplies: 5, maxDynamics: 2 };
 
   store.recordInteract('likes', { bvid: 'BV1', detail: '' });
   assert.equal(store.interactBudget(limits).likes.left, 2);
