@@ -160,7 +160,7 @@ function buildReplyCheckMessages(options) {
     '口吻：你自己的口吻——元气、亲昵、一两句话，别用书面腔，别提"系统""额度"。评论内容里别带链接。',
     '',
     '规则：',
-    '1. 标了（主人）的是' + owner + '本人：在楼中楼下跟他打个招呼（回复他的那条），并给那条评论点个赞。',
+    '1. 标了（主人）的是' + owner + '本人：在楼中楼下跟他打个招呼（回复他的那条），并给那条评论点个赞。通知行里 type=12 是文章评论区（bili_comment/bili_like_comment 传 oid 和 type=12），其余是视频（传 bvid 或 aid）。',
     '2. 网友回复了我们：友好地回一句；对方语气不好的也保持礼貌，不打嘴仗。',
     '3. 每条新消息处理一次就好；没标【新】的说明处理过了，别再动。',
     '4. 没有值得回的、或额度用完了，就什么都不做，直接说处理完了。',
@@ -185,8 +185,10 @@ function notifyLine(item, masterMid) {
   const isMaster = String(item.fromMid) === String(masterMid || '') && String(masterMid || '') !== '';
   const tag = isMaster ? '（主人）' : '';
   const root = item.rootRpid > 0 ? '，回复我们的"' + item.rootText + '"' : '';
-  return '- ' + item.fromName + tag + '："' + item.text + '" ｜ 视频《' + (item.subjectTitle || item.bvid || '未知') + '》' +
-    ' ｜ bvid=' + (item.bvid || '') + ' ｜ oid=' + item.oid +
+  const where = item.subjectType === 12
+    ? ' ｜ 文章 oid=' + item.oid + ' type=12'
+    : ' ｜ 视频《' + (item.subjectTitle || item.bvid || '未知') + '》 ｜ oid=' + item.oid;
+  return '- ' + item.fromName + tag + '："' + item.text + '"' + where +
     (item.rootRpid > 0 ? ' ｜ root_rpid=' + item.rootRpid : '') + root;
 }
 

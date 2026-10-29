@@ -285,6 +285,8 @@ function createBiliApi(client, options) {
         fromName: String(user.uname || ''),
         text: trimText(content.message, 200),
         oid: Number(subject.oid || subject.pid || item.business_id) || 0,
+        // 1=视频评论区，12=专栏文章评论区；回什么类型由它决定
+        subjectType: Number(subject.type || 1) || 1,
         bvid: String(subject.bvid || ''),
         subjectTitle: stripTags(subject.title || ''),
         rootRpid: Number(rootReply.rpid || item.root_rpid) || 0,
@@ -349,20 +351,25 @@ function createBiliApi(client, options) {
     });
   }
 
-  /** 发评论：root>0 时是楼中楼回复某人；bvid/aid 二选一（通知里只有 oid 时走 aid） */
+  /**
+   * 发评论：root>0 时是楼中楼回复某人。
+   * 视频：传 bvid 或 aid（type=1）；文章：传 oid=cv号 + type=12。
+   */
   async function reply(params) {
     const p = params || {};
     const message = String(p.message == null ? '' : p.message).trim();
     if (message === '') throw new BiliError('评论内容不能为空', 0);
     if (message.length > 300) throw new BiliError('评论太长（' + message.length + ' 字），压到 300 字以内', 0);
-    let aid = Number(p.aid) || 0;
-    if (!aid) {
+    const type = Number(p.type) === 12 ? 12 : 1;
+    let oid = Number(p.oid) || Number(p.aid) || 0;
+    if (!oid) {
+      if (type === 12) throw new BiliError('文章评论需要 oid（cv 号）', 0);
       const bvid = assertBvid(p.bvid);
       const info = await video({ bvid: bvid });
       if (!info.aid) throw new BiliError('拿不到 aid，没法评论：' + bvid, -404);
-      aid = info.aid;
+      oid = info.aid;
     }
-    const body = { oid: aid, type: 1, message: message };
+    const body = { oid: oid, type: type, message: message };
     const root = Number(p.rootRpid) || 0;
     if (root > 0) {
       body.root = root;
@@ -372,13 +379,14 @@ function createBiliApi(client, options) {
     return data && Number(data.rpid) > 0 ? { rpid: Number(data.rpid) } : { rpid: 0 };
   }
 
-  /** 给评论点赞（action=1）；用来给主人的留言捧场 */
+  /** 给评论点赞（action=1）；用来给主人的留言捧场。文章评论传 type=12 */
   async function likeComment(params) {
     const p = params || {};
     const oid = Number(p.oid) || 0;
     const rpid = Number(p.rpid) || 0;
     if (!oid || !rpid) throw new BiliError('likeComment 需要 oid 和 rpid', 0);
-    return client.post('/x/v2/reply/action', { oid: oid, type: 1, rpid: rpid, action: 1 });
+    const type = Number(p.type) === 12 ? 12 : 1;
+    return client.post('/x/v2/reply/action', { oid: oid, type: type, rpid: rpid, action: 1 });
   }
 
   return {
