@@ -813,6 +813,8 @@ function createServer(config, deps) {
   // 测试和 main() 都需要拿到能力宿主（看状态、关停）
   server.features = featureHost;
   server.bus = bus;
+  // 开关同步定时器留给 main() 关服时清理；disableBackground 时是 null
+  server.featureSyncTimer = featureSyncTimer;
 
   return server;
 }
@@ -870,7 +872,7 @@ function main() {
 
   const shutdown = function () {
     console.log('\n正在关闭…');
-    clearInterval(featureSyncTimer);
+    if (server.featureSyncTimer) clearInterval(server.featureSyncTimer);
     try {
       server.features.stopAll();
     } catch (err) {
