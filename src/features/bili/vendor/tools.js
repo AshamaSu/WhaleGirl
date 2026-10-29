@@ -365,7 +365,7 @@ function createBiliTools(api, options) {
           bvid: { type: 'string', description: 'BV 号（视频评论时填这个）' },
           aid: { type: 'number', description: '视频的 aid；只有通知里给 oid 没有 bvid 时用它' },
           oid: { type: 'number', description: '文章评论时填这个（通知里 type=12 的 oid，即 cv 号）' },
-          type: { type: 'number', description: '评论区类型：1=视频（默认），12=专栏文章（通知里 type=12 时必须传 12）' },
+          type: { type: 'number', description: '评论区类型：1=视频（默认），11=动态/图文，12=专栏文章（通知行里 type 是几就传几）' },
           message: { type: 'string', description: '评论内容，小鲸的口吻，一两句话' },
           rootRpid: { type: 'number', description: '楼中楼时填楼层的根 rpid（通知行里的 root_rpid），直接评论就别填' },
           parentRpid: { type: 'number', description: '楼中楼里回复某条具体评论时填对方的 rpid（通知行里的 reply_rpid）；不填=回复楼层根' },
@@ -382,7 +382,7 @@ function createBiliTools(api, options) {
           message = '回复 @' + atName + ' : ' + message;
         }
         const hasBvid = /^BV[0-9A-Za-z]{10}$/.test(String(args.bvid || '').trim());
-        const type = Number(args.type) === 12 ? 12 : 1;
+        const type = [1, 11, 12].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
         const oid = Number(args.oid) || 0;
         const aid = Number(args.aid) || 0;
         if (!hasBvid && !aid && !oid) return 'bvid/aid/oid 都没有，发不出去。';
@@ -405,7 +405,7 @@ function createBiliTools(api, options) {
         properties: {
           oid: { type: 'number', description: '评论区 oid（视频是 aid，文章是 cv 号）' },
           rpid: { type: 'number', description: '评论的 rpid' },
-          type: { type: 'number', description: '1=视频（默认），12=专栏文章' },
+          type: { type: 'number', description: '1=视频（默认），11=动态/图文，12=专栏文章' },
         },
         required: ['oid', 'rpid'],
       },
@@ -414,7 +414,8 @@ function createBiliTools(api, options) {
         const rpid = Number(args.rpid) || 0;
         if (!oid || !rpid) return 'oid/rpid 不对，没点。';
         return runWrite('likes', 1, { bvid: String(rpid), detail: '给评论点赞 oid=' + oid }, async function () {
-          await api.likeComment({ oid: oid, rpid: rpid, type: Number(args.type) === 12 ? 12 : 1 });
+          const commentType = [1, 11, 12].indexOf(Number(args.type)) !== -1 ? Number(args.type) : 1;
+          await api.likeComment({ oid: oid, rpid: rpid, type: commentType });
           return '评论点赞成功（rpid=' + rpid + '）';
         });
       },

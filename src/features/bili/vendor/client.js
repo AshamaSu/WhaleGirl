@@ -65,6 +65,17 @@ function createBiliClient(options) {
   };
 
   let buvid3 = String(opts.buvid3 || env.WG_BILI_BUVID3 || '').trim();
+  // 浏览器同款设备指纹：有历史记录的指纹能明显降低评论进审核的概率
+  const extraFingerprint = [
+    ['WG_BILI_BUVID4', 'buvid4'],
+    ['WG_BILI_B_NUT', 'b_nut'],
+    ['WG_BILI_UUID', '_uuid'],
+  ].map(function (pair) {
+    const value = String(env[pair[0]] || '').trim();
+    return value !== '' ? pair[1] + '=' + value : '';
+  }).filter(Boolean);
+  // 自由扩展位：.env 里 WG_BILI_EXTRA_COOKIES="k=v; k2=v2"，浏览器里其余 cookie（buvid_fp 等）原样带上
+  const extraCookies = String(env.WG_BILI_EXTRA_COOKIES || '').trim();
   let navCache = { key: '', at: 0 };
   let nextAt = 0;
   let queue = Promise.resolve();
@@ -72,6 +83,8 @@ function createBiliClient(options) {
   function cookieHeader() {
     const parts = [];
     if (buvid3) parts.push('buvid3=' + buvid3);
+    for (let i = 0; i < extraFingerprint.length; i += 1) parts.push(extraFingerprint[i]);
+    if (extraCookies !== '') parts.push(extraCookies);
     if (auth.sessdata) parts.push('SESSDATA=' + auth.sessdata);
     if (auth.biliJct) parts.push('bili_jct=' + auth.biliJct);
     if (auth.dedeUserId) parts.push('DedeUserID=' + auth.dedeUserId);
@@ -209,7 +222,7 @@ function createBiliClient(options) {
     const body = buildQuery(source);
     const result = await requestUrl(urlOf(pathname, ''), {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', origin: 'https://www.bilibili.com', referer: 'https://www.bilibili.com/' },
       body: body,
     });
     return result.data;

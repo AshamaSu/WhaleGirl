@@ -288,7 +288,7 @@ function createBiliApi(client, options) {
         fromName: String(user.nickname || user.uname || ''),
         text: trimText(item.source_content, 200),
         oid: oid,
-        subjectType: Number(item.business_id) === 12 ? 12 : 1,
+        subjectType: [1, 11, 12].indexOf(Number(item.business_id)) !== -1 ? Number(item.business_id) : 1,
         bvid: '',
         subjectTitle: stripTags(item.title || ''),
         rootRpid: Number(item.root_id) || 0,
@@ -368,18 +368,19 @@ function createBiliApi(client, options) {
   }
 
   /**
-   * 发评论：root>0 时是楼中楼回复某人。
-   * 视频：传 bvid 或 aid（type=1）；文章：传 oid=cv号 + type=12。
+   * 发评论：root>0 时是楼中楼回复某人，parent 用对方 rpid。
+   * type：1=视频（bvid/aid），11=动态/图文（oid=动态评论id），12=文章（oid=cv号）。
    */
+  const REPLY_TYPES = [1, 11, 12];
   async function reply(params) {
     const p = params || {};
     const message = String(p.message == null ? '' : p.message).trim();
     if (message === '') throw new BiliError('评论内容不能为空', 0);
     if (message.length > 300) throw new BiliError('评论太长（' + message.length + ' 字），压到 300 字以内', 0);
-    const type = Number(p.type) === 12 ? 12 : 1;
+    const type = REPLY_TYPES.indexOf(Number(p.type)) !== -1 ? Number(p.type) : 1;
     let oid = Number(p.oid) || Number(p.aid) || 0;
     if (!oid) {
-      if (type === 12) throw new BiliError('文章评论需要 oid（cv 号）', 0);
+      if (type !== 1) throw new BiliError('动态/文章评论需要 oid', 0);
       const bvid = assertBvid(p.bvid);
       const info = await video({ bvid: bvid });
       if (!info.aid) throw new BiliError('拿不到 aid，没法评论：' + bvid, -404);
@@ -402,7 +403,7 @@ function createBiliApi(client, options) {
     const oid = Number(p.oid) || 0;
     const rpid = Number(p.rpid) || 0;
     if (!oid || !rpid) throw new BiliError('likeComment 需要 oid 和 rpid', 0);
-    const type = Number(p.type) === 12 ? 12 : 1;
+    const type = [1, 11, 12].indexOf(Number(p.type)) !== -1 ? Number(p.type) : 1;
     return client.post('/x/v2/reply/action', { oid: oid, type: type, rpid: rpid, action: 1 });
   }
 
