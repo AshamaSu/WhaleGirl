@@ -318,6 +318,36 @@ function createBiliModule(options) {
         ctx.sendJson(res, 202, { ok: true, started: true });
       });
 
+      // 手动触发一次轻量查回复（与定时同一套闸门，方便验收与排查）
+      ctx.route('POST', '/api/features/bili/check-replies', function (req, res) {
+        if (running || replyChecking) {
+          ctx.sendJson(res, 409, { ok: false, error: '上一轮还在跑' });
+          return;
+        }
+        if (client.hasLogin && !client.hasLogin()) {
+          ctx.sendJson(res, 400, { ok: false, error: 'B站账号没登录' });
+          return;
+        }
+        replyChecking = true;
+        const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
+        runReplyCheckRound({
+          store: store,
+          section: section,
+          api: api,
+          tools: tools,
+          runAgent: runAgent,
+          masterMid: typeof client.mid === 'function' ? client.mid() : '',
+          logger: logger,
+          now: clock,
+          timeoutMs: ctx.getConfig().requestTimeoutMs,
+        }).catch(function (err) {
+          logger.warn('[bili] 手动查回复失败：' + (err && err.message ? err.message : err));
+        }).then(function () {
+          replyChecking = false;
+        });
+        ctx.sendJson(res, 202, { ok: true, started: true });
+      });
+
       if (typeof ctx.addPromptBlock === 'function') {
         ctx.addPromptBlock(function () { return historyPrompt(store); });
       }

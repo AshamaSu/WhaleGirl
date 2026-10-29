@@ -251,10 +251,11 @@ function createBiliTools(api, options) {
         return list.map(function (item, index) {
           const isNew = isNewNotified && isNewNotified(item.id) ? '【新】' : '';
           const root = item.rootRpid > 0 ? '（回复我们：' + item.rootText + '）' : '';
-          const where = item.subjectType === 12 ? ' ｜ 文章oid=' + item.oid : ' ｜ 视频：' + (item.subjectTitle || '') + ' ｜ bvid=' + (item.bvid || '') + ' ｜ oid=' + item.oid;
+          const where = item.subjectType === 12 ? ' ｜ 文章oid=' + item.oid + ' type=12' : ' ｜ 视频：' + (item.subjectTitle || '') + ' ｜ oid=' + item.oid;
           return (index + 1) + '. ' + isNew + item.fromName + masterTag(item.fromMid) + '：' + item.text +
             where +
-            (item.rootRpid > 0 ? ' ｜ root_rpid=' + item.rootRpid : '') + root;
+            (item.rootRpid > 0 ? ' ｜ root_rpid=' + item.rootRpid : '') +
+            (item.replyRpid > 0 ? ' ｜ reply_rpid=' + item.replyRpid : '') + root;
         }).join('\n');
       },
     },

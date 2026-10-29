@@ -76,9 +76,10 @@ function tableFor(calls) {
       ] } };
     }
     if (url.indexOf('/x/msgfeed/reply') !== -1) {
+      // 2026-10 实测的真实结构
       return { code: 0, data: { items: [
-        { id: 'msg-1', user: { mid: 9973677, uname: '主人' }, item: { subject: { oid: 1001, bvid: 'BV1like00001', title: '标题' }, root_reply: { rpid: 555, content: { message: '我们原来的评论' } }, reply_content: { message: '谢谢投币！' }, time_at: '13:00' } },
-        { id: 'msg-2', user: { mid: 7, uname: '网友' }, item: { subject: { oid: 1001, title: '标题' }, reply_content: { message: '同好！' }, time_at: '13:05' } },
+        { id: 1190711467122688, user: { mid: 9973677, nickname: '主人' }, item: { subject_id: 43660166, root_id: 322274546432, source_id: 318557538337, type: 'reply', business_id: 12, title: '文章标题', root_reply_content: '我们原来的评论', source_content: '谢谢投币！' } },
+        { id: 'msg-2', user: { mid: 7, nickname: '网友' }, item: { subject_id: 1001, root_id: 0, source_id: 777, type: 'reply', business_id: 1, title: '视频标题', root_reply_content: '', source_content: '同好！' } },
       ] } };
     }
     return null;
@@ -186,9 +187,15 @@ test('followings/masterDynamics/msgfeed 都归一化成干净字段', async func
   const feed = await api.msgfeedReplies({ ps: 10 });
   assert.equal(feed.length, 2);
   assert.equal(feed[0].fromMid, 9973677);
-  assert.equal(feed[0].oid, 1001);
-  assert.equal(feed[0].rootRpid, 555);
-  assert.equal(feed[1].rootRpid, 0);
+  assert.equal(feed[0].fromName, '主人');
+  assert.equal(feed[0].oid, 43660166);
+  assert.equal(feed[0].subjectType, 12);
+  assert.equal(feed[0].rootRpid, 322274546432);
+  assert.equal(feed[0].replyRpid, 318557538337);
+  assert.equal(feed[0].text, '谢谢投币！');
+  assert.equal(feed[1].subjectType, 1);
+  assert.equal(feed[1].oid, 1001);
+  assert.equal(feed[1].replyRpid, 777);
 });
 
 // ===== store：互动预算 =====
@@ -337,7 +344,9 @@ test('互动没开时写工具说明原因，主人的评论会被标注', async
   const feed = await toolByName(tools, 'bili_check_replies').execute({});
   assert.match(feed, /【新】/);
   assert.match(feed, /主人（主人）|主人（\(主人\)）/);
-  assert.match(feed, /root_rpid=555/);
+  assert.match(feed, /root_rpid=322274546432/);
+  assert.match(feed, /reply_rpid=318557538337/);
+  assert.match(feed, /type=12/);
 });
 
 // ===== runner：轻量查回复轮 =====
@@ -351,7 +360,7 @@ test('没有新通知时一次模型都不调', async function () {
     store: store,
     section: { owner: '主人' },
     api: { msgfeedReplies: async function () { return [
-      { id: 'msg-1', fromMid: 9973677, fromName: '主人', text: '谢谢投币', oid: 1001, subjectTitle: '标题', rootRpid: 555, rootText: '原评论', timeAt: '' },
+      { id: 'msg-1', fromMid: 9973677, fromName: '主人', text: '谢谢投币', oid: 1001, subjectType: 1, subjectTitle: '标题', rootRpid: 555, rootText: '原评论', replyRpid: 888, timeAt: '' },
     ]; } },
     runAgent: function () { agentCalls += 1; return (async function* () {})(); },
     masterMid: '9973677',
@@ -379,8 +388,8 @@ test('有新通知：交给工具循环处理，处理后不再算新', async fu
     store: store,
     section: { owner: '主人' },
     api: { msgfeedReplies: async function () { return [
-      { id: 'msg-1', fromMid: 9973677, fromName: '主人', text: '谢谢投币', oid: 1001, subjectTitle: '标题', rootRpid: 555, rootText: '原评论', timeAt: '' },
-      { id: 'msg-9', fromMid: 7, fromName: '网友', text: '同好', oid: 1001, subjectTitle: '标题', rootRpid: 0, rootText: '', timeAt: '' },
+      { id: 'msg-1', fromMid: 9973677, fromName: '主人', text: '谢谢投币', oid: 1001, subjectType: 1, subjectTitle: '标题', rootRpid: 555, rootText: '原评论', replyRpid: 888, timeAt: '' },
+      { id: 'msg-9', fromMid: 7, fromName: '网友', text: '同好', oid: 1001, subjectType: 1, subjectTitle: '标题', rootRpid: 0, rootText: '', replyRpid: 999, timeAt: '' },
     ]; } },
     runAgent: runAgent,
     tools: [],

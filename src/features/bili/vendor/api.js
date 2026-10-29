@@ -264,8 +264,13 @@ function createBiliApi(client, options) {
   // ===== 通知（#4：谁回复了我们）=====
 
   /**
-   * 「回复我的」消息列表。B站这层字段名不保证稳定，全部兜底取值：
-   * 关键要拿到 回复人、说了什么、在哪条视频（oid）、对着哪条评论（root rpid）。
+   * 「回复我的」消息列表（2026-10 实测结构）：
+   *   item.subject_id = 评论区 oid（视频是 aid，文章是 cv 号）
+   *   item.business_id = 评论区类型（1=视频，12=文章）
+   *   item.root_id = 我们被回复的那条评论（楼中楼根）
+   *   item.source_id = 对方那条评论的 rpid（点赞它用这个）
+   *   item.source_content = 对方说的话；item.root_reply_content = 我们原评论
+   * 字段缺失就兜底，单条坏数据不炸整页。
    */
   async function msgfeedReplies(params) {
     const p = params || {};
@@ -276,24 +281,22 @@ function createBiliApi(client, options) {
       const e = entry || {};
       const user = e.user || {};
       const item = e.item || {};
-      const subject = item.subject || {};
-      const rootReply = item.root_reply || item.root || {};
-      const content = item.reply_content || item.content || {};
+      const oid = Number(item.subject_id) || 0;
       return {
-        id: String(e.id || item.reply_id || (item.rpid + '') || ''),
+        id: String(e.id || ''),
         fromMid: Number(user.mid) || 0,
-        fromName: String(user.uname || ''),
-        text: trimText(content.message, 200),
-        oid: Number(subject.oid || subject.pid || item.business_id) || 0,
-        // 1=视频评论区，12=专栏文章评论区；回什么类型由它决定
-        subjectType: Number(subject.type || 1) || 1,
-        bvid: String(subject.bvid || ''),
-        subjectTitle: stripTags(subject.title || ''),
-        rootRpid: Number(rootReply.rpid || item.root_rpid) || 0,
-        rootText: trimText(rootReply.content ? rootReply.content.message : (item.source_content || ''), 100),
-        timeAt: String(item.time_at || ''),
+        fromName: String(user.nickname || user.uname || ''),
+        text: trimText(item.source_content, 200),
+        oid: oid,
+        subjectType: Number(item.business_id) === 12 ? 12 : 1,
+        bvid: '',
+        subjectTitle: stripTags(item.title || ''),
+        rootRpid: Number(item.root_id) || 0,
+        rootText: trimText(item.root_reply_content, 100),
+        replyRpid: Number(item.source_id) || 0,
+        timeAt: String(item.reply_time || ''),
       };
-    }).filter(function (item) { return item.id !== '' && (item.oid > 0 || item.rootRpid > 0); });
+    }).filter(function (item) { return item.id !== '' && item.oid > 0; });
   }
 
   // ===== 写操作（#3：互动）。都要求登录，csrf 由 client.post 统一带 =====
