@@ -376,7 +376,8 @@ function createBiliApi(client, options) {
     const root = Number(p.rootRpid) || 0;
     if (root > 0) {
       body.root = root;
-      body.parent = root;
+      // parent 指向被回复的那条评论（楼中楼里 @ 的对象）；不传就是回复楼层根
+      body.parent = Number(p.parentRpid) || root;
     }
     const data = await client.post('/x/v2/reply/add', body);
     return data && Number(data.rpid) > 0 ? { rpid: Number(data.rpid) } : { rpid: 0 };

@@ -367,7 +367,8 @@ function createBiliTools(api, options) {
           oid: { type: 'number', description: '文章评论时填这个（通知里 type=12 的 oid，即 cv 号）' },
           type: { type: 'number', description: '评论区类型：1=视频（默认），12=专栏文章（通知里 type=12 时必须传 12）' },
           message: { type: 'string', description: '评论内容，小鲸的口吻，一两句话' },
-          rootRpid: { type: 'number', description: '楼中楼时填要回复的评论 rpid，直接评论就别填' },
+          rootRpid: { type: 'number', description: '楼中楼时填楼层的根 rpid（通知行里的 root_rpid），直接评论就别填' },
+          parentRpid: { type: 'number', description: '楼中楼里回复某条具体评论时填对方的 rpid（通知行里的 reply_rpid）；不填=回复楼层根' },
         },
         required: ['message'],
       },
@@ -381,11 +382,11 @@ function createBiliTools(api, options) {
         if (!hasBvid && !aid && !oid) return 'bvid/aid/oid 都没有，发不出去。';
         const key = hasBvid ? String(args.bvid).trim() : (type === 12 ? 'cv:' + oid : 'aid:' + aid);
         return runWrite('replies', 1, { bvid: key, detail: '评论：' + message }, async function () {
-          const result = await api.reply(hasBvid
-            ? { bvid: String(args.bvid).trim(), message: message, rootRpid: Number(args.rootRpid) || 0 }
-            : (type === 12
-              ? { oid: oid, type: 12, message: message, rootRpid: Number(args.rootRpid) || 0 }
-              : { aid: aid, message: message, rootRpid: Number(args.rootRpid) || 0 }));
+          const replyArgs = { message: message, rootRpid: Number(args.rootRpid) || 0, parentRpid: Number(args.parentRpid) || 0 };
+          let result;
+          if (hasBvid) result = await api.reply(Object.assign({ bvid: String(args.bvid).trim() }, replyArgs));
+          else if (type === 12) result = await api.reply(Object.assign({ oid: oid, type: 12 }, replyArgs));
+          else result = await api.reply(Object.assign({ aid: aid }, replyArgs));
           return (Number(args.rootRpid) > 0 ? '楼中楼回复' : '评论') + '发送成功（rpid=' + result.rpid + '）：' + message;
         });
       },

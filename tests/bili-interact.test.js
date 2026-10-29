@@ -150,7 +150,7 @@ test('点赞/投币/三连/收藏/评论：参数与 csrf 都对', async functio
   assert.equal(replyed.rpid, 999);
 });
 
-test('文章评论走 oid+type=12 直发', async function () {
+test('文章评论走 oid+type=12 直发；parent 缺省回落 root', async function () {
   const fetchImpl = makeFetch(tableFor());
   const api = createBiliApi(newClient(fetchImpl), {});
   await api.reply({ oid: 43660166, type: 12, message: '主人来啦～', rootRpid: 322274546432 });
@@ -158,6 +158,16 @@ test('文章评论走 oid+type=12 直发', async function () {
   assert.match(call.body, /oid=43660166/);
   assert.match(call.body, /type=12/);
   assert.match(call.body, /root=322274546432/);
+  assert.match(call.body, /parent=322274546432/);
+});
+
+test('楼中楼回复指定对方：parent 用 reply_rpid', async function () {
+  const fetchImpl = makeFetch(tableFor());
+  const api = createBiliApi(newClient(fetchImpl), {});
+  await api.reply({ oid: 43660166, type: 12, message: '回复 @跃动的金币 : 主人好呀～', rootRpid: 322274546432, parentRpid: 318557538337 });
+  const call = fetchImpl.calls.filter(function (entry) { return entry.url.indexOf('/v2/reply/add') !== -1; })[0];
+  assert.match(call.body, /root=322274546432/);
+  assert.match(call.body, /parent=318557538337/);
 });
 
 test('评论支持 aid 直发（通知里没有 bvid 的场景）', async function () {
