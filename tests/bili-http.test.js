@@ -48,6 +48,8 @@ test('三条路由都带契约与摘要，路径与顺序稳定', function () {
     'GET /api/features/bili/state',
     'POST /api/features/bili/run',
     'POST /api/features/bili/check-replies',
+    'GET /api/features/bili/params',
+    'POST /api/features/bili/params',
   ]);
   for (const route of env.routes) {
     assert.equal(typeof route.summary, 'string');

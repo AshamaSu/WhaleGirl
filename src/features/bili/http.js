@@ -98,6 +98,50 @@ function createBiliHttp(svc, ctx) {
         ctx.sendJson(res, 202, { ok: true, started: true });
       },
     },
+    {
+      method: 'GET',
+      pathname: '/api/features/bili/params',
+      summary: '参数面板数据：参数定义（插件提供）+ 当前原始配置段',
+      contract: {
+        request: '无参数',
+        response: {
+          ok: 'boolean，恒为 true',
+          enabled: 'boolean，插件当前是否启用',
+          section: 'object，config.json 里的原始 bili 段（含 enabled）',
+          params: 'array，参数定义 [{ key, type: number/boolean/string/strings, label, min?, max?, default, desc? }]，键支持 interact.* 点路径',
+        },
+      },
+      handler: function (req, res) {
+        const raw = svc.rawSection();
+        ctx.sendJson(res, 200, {
+          ok: true,
+          enabled: raw.enabled === true,
+          section: raw,
+          params: svc.specs(),
+        });
+      },
+    },
+    {
+      method: 'POST',
+      pathname: '/api/features/bili/params',
+      summary: '写参数：校验 → 保注释写回 config.json → 立即生效（含开关）',
+      contract: {
+        request: '{ "参数键": 值, ... }；键见 GET /params 的 params 定义，支持 interact.* 点路径与 enabled',
+        response: {
+          '200': '{ ok: true, applied: 写回后的完整 bili 段 }',
+          '400': '{ ok: false, errors: ["校验失败文案", ...] }',
+        },
+      },
+      handler: async function (req, res) {
+        const body = await ctx.readJson(req, 64 * 1024).catch(function () { return null; });
+        const result = svc.applyParams(body || {});
+        if (!result.ok) {
+          ctx.sendJson(res, 400, { ok: false, errors: result.errors || ['参数不合法'] });
+          return;
+        }
+        ctx.sendJson(res, 200, { ok: true, applied: result.applied });
+      },
+    },
   ];
 }
 

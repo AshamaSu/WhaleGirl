@@ -80,8 +80,12 @@ vendor/    B站协议层
 | `GET /state` | 200：`{ ok, running, section, state, lastResult, seen, login, mid, interact{section,budget,log}, lastReplyCheckAt }` |
 | `POST /run` | 202 `{ok,started}`；409 上一轮还在跑 |
 | `POST /check-replies` | 202 `{ok,started}`；409 忙（浏览/查回复任一）；400 未登录 |
+| `GET /params` | 200：`{ ok, enabled, section, params }`——params 是插件自带的参数定义（17 项，含类型/范围/默认值/说明） |
+| `POST /params` | 200 `{ok, applied}`；400 `{ok, errors[]}`。校验→保注释写回 config.json→运行段热生效 |
 
 （完整契约看 `src/features/bili/http.js`，以代码为准。）
+
+**参数管理面板**：`/settings` 页——列插件开关（宿主 `POST /api/features/<name>/enabled`），参数表单由各插件 GET /params 的定义渲染（**参数功能由插件自身提供**，面板不硬编码）。配置写回走 `src/config-edit.js`（JSONC 保注释局部补丁，写前校验、非法不落盘）。
 
 宿主集成点：`addPromptBlock`（最近看过的视频，主人问起照实说）· `bus.emit('push')`（播报与 self turn）· `makeAgent`（子代理循环）。
 

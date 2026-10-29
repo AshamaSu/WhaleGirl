@@ -11,6 +11,7 @@ const {
   describeProvider,
 } = require('./src/config');
 const { loadPersona, validatePersona, buildMessages } = require('./src/persona');
+const configEdit = require('./src/config-edit');
 const { streamChat } = require('./src/llm');
 const { runAgent } = require('./src/agent');
 const { createTools } = require('./src/tools');
@@ -774,9 +775,38 @@ function createServer(config, deps) {
 
     // 先把开关状态对齐到最新配置，再匹配能力路由：否则关闭后旧路由仍会被命中
     if (pathname.indexOf('/api/') === 0) syncFeaturesNow();
+    // 插件开关（宿主职责）：POST /api/features/<name>/enabled { enabled: true|false }
+    const enabledMatch = req.method === 'POST' ? /^\/api\/features\/([a-z0-9-]+)\/enabled$/.exec(pathname) : null;
+    if (enabledMatch) {
+      const target = enabledMatch[1];
+      if (!featureHost.state()[target]) {
+        sendJson(res, 404, { ok: false, error: '没有这个插件：' + target });
+        return;
+      }
+      const body = await parseJsonBody(await readBody(req, MAX_BODY_BYTES)).catch(function () { return {}; });
+      if (!body || typeof body.enabled !== 'boolean') {
+        sendJson(res, 400, { ok: false, error: '请求体需要 { enabled: true 或 false }' });
+        return;
+      }
+      const enabled = body.enabled;
+      const result = configEdit.patchFeatureSection(root, target, { enabled: enabled });
+      if (!result.ok) {
+        sendJson(res, 500, { ok: false, error: result.error });
+        return;
+      }
+      syncFeaturesNow();
+      sendJson(res, 200, { ok: true, name: target, enabled: enabled, features: featureHost.state() });
+      return;
+    }
+
     const featureRoute = featureHost.matchRoute(req.method, pathname);
     if (featureRoute) {
       await featureRoute.handler(req, res, url);
+      return;
+    }
+
+    if (pathname === '/settings') {
+      serveStatic(req, res, '/settings.html', publicDir);
       return;
     }
 

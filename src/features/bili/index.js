@@ -5,7 +5,8 @@ const { createBiliApi } = require('./vendor/api');
 const { createBiliTools } = require('./vendor/tools');
 const { createBiliStore } = require('./store');
 const { runBiliRound, runReplyCheckRound } = require('./runner');
-const { shouldAutoRun, shouldCheckReplies } = require('./schedule');
+const { shouldAutoRun, shouldCheckReplies, parseWindow } = require('./schedule');
+const configEdit = require('../../config-edit');
 const { buildAnnounceMessages, splitBubbles } = require('./runner');
 const { createBiliHttp } = require('./http');
 
@@ -14,6 +15,92 @@ function featureSection(config) {
   const features = config && config.features;
   const section = features && features.bili;
   return section && typeof section === 'object' && !Array.isArray(section) ? section : null;
+}
+
+/** 参数面板的参数定义（插件自己提供，面板按它渲染与校验） */
+const PARAM_SPECS = [
+  { key: 'owner', type: 'string', label: '对主人的称呼', default: '主人' },
+  { key: 'intervalMinutes', type: 'number', label: '自动轮间隔（分钟）', min: 30, max: 1440, default: 180, desc: '两次自动浏览的最小间隔；手动触发不受限' },
+  { key: 'dailyQuota', type: 'number', label: '每日自动轮数上限', min: 0, max: 20, default: 4, desc: '手动轮不计入；0 = 只手动' },
+  { key: 'activeWindows', type: 'strings', label: '活跃时段', default: ['12:00-14:00', '18:00-09:00'], desc: '每行一个 HH:MM-HH:MM，可跨夜；留空 = 全天' },
+  { key: 'weekendAllDay', type: 'boolean', label: '周末全天可跑', default: true, desc: '周末不受活跃时段限制' },
+  { key: 'keywords', type: 'strings', label: '兴趣关键词', default: [], desc: '留空 = 按大众口味挑' },
+  { key: 'itemsPerRound', type: 'number', label: '每轮挑几条', min: 1, max: 10, default: 3, desc: '' },
+  { key: 'minPlays', type: 'number', label: '候选最低播放量', min: 0, max: 100000000, default: 5000, desc: '' },
+  { key: 'maxDaysOld', type: 'number', label: '只看几天内发布', min: 0, max: 365, default: 14, desc: '' },
+  { key: 'maxRounds', type: 'number', label: '子代理工具轮次上限', min: 1, max: 16, default: 8, desc: '防跑飞烧 token' },
+  { key: 'announce', type: 'boolean', label: '推出口吻播报', default: true, desc: 'false 只落报告' },
+  { key: 'replyCheckIntervalMinutes', type: 'number', label: '查回复间隔（分钟）', min: 5, max: 1440, default: 30, desc: '' },
+  { key: 'interact.enabled', type: 'boolean', label: '允许互动（写操作）', default: false, desc: '点赞/投币/收藏/评论的总开关' },
+  { key: 'interact.maxLikes', type: 'number', label: '每日点赞上限', min: 0, max: 50, default: 10, desc: '' },
+  { key: 'interact.maxCoins', type: 'number', label: '每日投币上限（枚）', min: 0, max: 10, default: 2, desc: '' },
+  { key: 'interact.maxFavorites', type: 'number', label: '每日收藏上限', min: 0, max: 20, default: 3, desc: '' },
+  { key: 'interact.maxReplies', type: 'number', label: '每日评论/回复上限', min: 0, max: 50, default: 5, desc: '' },
+];
+
+const SPEC_MAP = {};
+for (const spec of PARAM_SPECS) SPEC_MAP[spec.key] = spec;
+
+/** 单个参数值校验；返回错误文案或 null */
+function validateSpec(spec, value) {
+  if (spec.type === 'boolean') return typeof value === 'boolean' ? null : '必须是 true/false';
+  if (spec.type === 'number') {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '必须是数字';
+    if (spec.min !== undefined && num < spec.min) return '不能小于 ' + spec.min;
+    if (spec.max !== undefined && num > spec.max) return '不能大于 ' + spec.max;
+    return null;
+  }
+  if (spec.type === 'string') return typeof value === 'string' && value.trim() !== '' ? null : '必须是非空字符串';
+  if (spec.type === 'strings') {
+    if (!Array.isArray(value)) return '必须是字符串数组';
+    for (const item of value) {
+      if (typeof item !== 'string' || item.trim() === '') return '数组里每项都必须是非空字符串';
+    }
+    return null;
+  }
+  return '未知类型';
+}
+
+/**
+ * 参数面板写入口：校验 patch → 合并到当前段 → 保注释写回 config.json。
+ * 返回 { ok, applied } 或 { ok: false, errors: [...] }。
+ */
+function applyBiliParams(root, currentRaw, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, errors: ['请求体必须是对象'] };
+  const errors = [];
+  const clean = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'enabled') {
+      if (typeof value !== 'boolean') { errors.push('enabled 必须是 true/false'); continue; }
+      clean.enabled = value;
+      continue;
+    }
+    const spec = SPEC_MAP[key];
+    if (!spec) { errors.push('未知参数：' + key); continue; }
+    const err = validateSpec(spec, value);
+    if (err) { errors.push(spec.label + '：' + err); continue; }
+    if (key === 'activeWindows') {
+      const bad = value.filter(function (item) { return parseWindow(item) === null; });
+      if (bad.length > 0) { errors.push('时段格式应为 HH:MM-HH:MM：' + bad.join('、')); continue; }
+    }
+    clean[key] = spec.type === 'number' ? Number(value) : value;
+  }
+  if (errors.length > 0) return { ok: false, errors: errors };
+  const writePatch = Object.assign({}, currentRaw);
+  for (const [key, value] of Object.entries(clean)) {
+    if (key === 'enabled') { writePatch.enabled = value; continue; }
+    const parts = key.split('.');
+    if (parts.length === 1) writePatch[key] = value;
+    else {
+      const sub = Object.assign({}, writePatch[parts[0]] || {});
+      sub[parts[1]] = value;
+      writePatch[parts[0]] = sub;
+    }
+  }
+  const result = configEdit.patchFeatureSection(root, 'bili', writePatch);
+  if (!result.ok) return { ok: false, errors: [result.error] };
+  return { ok: true, applied: result.applied };
 }
 
 const TICK_MS = 60 * 1000;
@@ -215,9 +302,19 @@ function createBiliModule(options) {
         }
       }
 
+      /** 参数热生效：每轮/每次取用前按最新 config 重归一（对象原位更新，闭包引用不失效） */
+      function syncSection() {
+        const fresh = normalizeSection(featureSection(ctx.getConfig()));
+        for (const key of Object.keys(fresh)) {
+          if (key === 'interact') Object.assign(section.interact, fresh.interact);
+          else section[key] = fresh[key];
+        }
+      }
+
       async function runOnce(trigger) {
         if (running) return { ok: false, error: '上一轮还在跑', skipped: true };
         running = true;
+        syncSection();
         try {
           const live = ctx.getConfig();
           const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
@@ -259,6 +356,7 @@ function createBiliModule(options) {
       }
 
       function tick() {
+        syncSection();
         if (running) return;
         const gate = shouldAutoRun({ state: store.state(), section: section, now: clock() });
         if (!gate.run) return;
@@ -271,6 +369,7 @@ function createBiliModule(options) {
       /** 轻量查回复（#4）：不占浏览轮额度；没登录就不白跑 */
       let replyChecking = false;
       function tickReplies() {
+        syncSection();
         if (running || replyChecking) return;
         if (client.hasLogin && !client.hasLogin()) return;
         const gate = shouldCheckReplies({ state: store.state(), section: section, now: clock() });
@@ -298,6 +397,16 @@ function createBiliModule(options) {
       // 功能面（svc）：接口层（http.js）只认这个门面，摸不到内部状态
       const svc = {
         running: function () { return running; },
+        rawSection: function () {
+          syncSection();
+          return featureSection(ctx.getConfig()) || {};
+        },
+        specs: function () { return PARAM_SPECS; },
+        applyParams: function (patch) {
+          const result = applyBiliParams(ctx.root, featureSection(ctx.getConfig()) || {}, patch);
+          if (result.ok) syncSection();
+          return result;
+        },
         replying: function () { return replyChecking; },
         lastResult: function () {
           return lastResult ? { ok: lastResult.ok, trigger: lastResult.trigger, picked: lastResult.picked, error: lastResult.error, at: lastResult.at } : null;
@@ -370,6 +479,12 @@ function createBiliModule(options) {
           replyTimer = null;
         },
         runOnce: runOnce,
+        applyParams: function (patch) {
+          const result = applyBiliParams(ctx.root, featureSection(ctx.getConfig()) || {}, patch);
+          if (result.ok) syncSection();
+          return result;
+        },
+        specs: function () { return PARAM_SPECS; },
         state: store.state,
         store: store,
         section: section,
