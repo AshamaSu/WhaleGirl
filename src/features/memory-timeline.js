@@ -15,6 +15,7 @@ const RESTORE_LIMIT = 8 * 1024 * 1024;
 function createMemoryTimelineModule() {
   return {
     name: 'memory',
+    core: true, // 宿主核心能力：常驻不可卸载，面板不给开关
     enabled: function (config) { return isEnabled(config, 'memory'); },
     init: function (ctx) {
       function settings() {

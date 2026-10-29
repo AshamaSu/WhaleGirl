@@ -90,20 +90,25 @@ function renderCard(name, info) {
   card.appendChild(head);
   card.appendChild(el('p', 'tip', info.error ? '异常：' + info.error : '参数由插件自身提供（接口契约见插件 http.js）'));
 
-  var toggle = el('div', 'toggle' + (info.enabled ? ' on' : ''));
-  toggle.title = '点击切换开关';
-  toggle.onclick = function () {
-    toggle.style.pointerEvents = 'none';
-    fetch('/api/features/' + name + '/enabled', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: !info.enabled }),
-    }).then(function (r) { return r.json(); }).then(function (body) {
-      if (body.ok) location.reload();
-      else { toggle.style.pointerEvents = ''; alert('切换失败：' + (body.error || '未知错误')); }
-    }).catch(function (e) { toggle.style.pointerEvents = ''; alert('请求失败：' + e.message); });
-  };
-  head.appendChild(toggle);
+  // 宿主核心能力（memory/mood）常驻不可卸载：不给开关，标个身份徽章
+  if (info.core) {
+    head.appendChild(el('span', 'badge', '宿主核心'));
+  } else {
+    var toggle = el('div', 'toggle' + (info.enabled ? ' on' : ''));
+    toggle.title = '点击切换开关';
+    toggle.onclick = function () {
+      toggle.style.pointerEvents = 'none';
+      fetch('/api/features/' + name + '/enabled', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: !info.enabled }),
+      }).then(function (r) { return r.json(); }).then(function (body) {
+        if (body.ok) location.reload();
+        else { toggle.style.pointerEvents = ''; alert('切换失败：' + (body.error || '未知错误')); }
+      }).catch(function (e) { toggle.style.pointerEvents = ''; alert('请求失败：' + e.message); });
+    };
+    head.appendChild(toggle);
+  }
 
   if (!info.enabled) return card;
 

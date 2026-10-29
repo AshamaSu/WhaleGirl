@@ -43,8 +43,8 @@ test('未声明的能力不启动，声明 enabled:true 才启动', function () 
   host.sync({ features: {} });
   assert.deepStrictEqual(host.running(), []);
   assert.deepStrictEqual(host.state(), {
-    mood: { enabled: false, error: '' },
-    bili: { enabled: false, error: '' },
+    mood: { core: false, enabled: false, error: '' },
+    bili: { core: false, enabled: false, error: '' },
   });
 
   host.sync({ features: { mood: { enabled: true } } });

@@ -779,8 +779,13 @@ function createServer(config, deps) {
     const enabledMatch = req.method === 'POST' ? /^\/api\/features\/([a-z0-9-]+)\/enabled$/.exec(pathname) : null;
     if (enabledMatch) {
       const target = enabledMatch[1];
-      if (!featureHost.state()[target]) {
+      const targetState = featureHost.state()[target];
+      if (!targetState) {
         sendJson(res, 404, { ok: false, error: '没有这个插件：' + target });
+        return;
+      }
+      if (targetState.core) {
+        sendJson(res, 403, { ok: false, error: '宿主核心能力不可关闭：' + target });
         return;
       }
       let body = {};

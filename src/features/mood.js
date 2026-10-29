@@ -344,6 +344,7 @@ function createMoodModule(options) {
   const opts = options || {};
   return {
     name: 'mood',
+    core: true, // 宿主核心能力：常驻不可卸载，面板不给开关
     enabled: function (config) { return isEnabled(config, 'mood'); },
     init: function (ctx) {
       const store = opts.store || createMoodStore({

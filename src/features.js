@@ -159,7 +159,11 @@ function createFeatureHost(options) {
       const name = modules[i] && modules[i].name;
       if (typeof name !== 'string' || name === '') continue;
       const state = states.get(name);
-      out[name] = { enabled: !!(state && state.enabled), error: (state && state.error) || '' };
+      out[name] = {
+        enabled: !!(state && state.enabled),
+        error: (state && state.error) || '',
+        core: !!(modules[i] && modules[i].core === true),
+      };
     }
     return out;
   }

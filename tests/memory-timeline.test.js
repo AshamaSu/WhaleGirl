@@ -181,9 +181,9 @@ test('能力关着时 /memory 与时间线接口都不存在，health 里如实�
 
     const health = await (await fetch(app.base + '/api/health')).json();
     assert.deepStrictEqual(health.features, {
-      mood: { enabled: false, error: '' },
-      memory: { enabled: false, error: '' },
-      bili: { enabled: false, error: '' },
+      mood: { core: true, enabled: false, error: '' },
+      memory: { core: true, enabled: false, error: '' },
+      bili: { core: false, enabled: false, error: '' },
     });
   } finally {
     await app.close();
