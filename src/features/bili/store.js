@@ -24,8 +24,17 @@ function stamp(date) {
 }
 
 function emptyState() {
-  return { dayKey: '', dayRounds: 0, lastRunAt: '', lastResult: null };
+  return { dayKey: '', dayRounds: 0, lastRunAt: '', lastResult: null, interact: emptyInteract(), interactLog: [] };
 }
+
+const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies'];
+
+function emptyInteract() {
+  return { dayKey: '', likes: 0, coins: 0, favorites: 0, replies: 0 };
+}
+
+/** 互动日志最多留 50 条，够最近几天的提示与排查用 */
+const MAX_INTERACT_LOG = 50;
 
 /**
  * B站子代理的落盘层：状态、判重表、报告、月度归档。
@@ -97,11 +106,21 @@ function createBiliStore(options) {
 
   function normalizeState(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
+    const interactSrc = source.interact && typeof source.interact === 'object' ? source.interact : {};
+    const interact = emptyInteract();
+    interact.dayKey = typeof interactSrc.dayKey === 'string' ? interactSrc.dayKey : '';
+    for (let i = 0; i < INTERACT_TYPES.length; i += 1) {
+      const key = INTERACT_TYPES[i];
+      interact[key] = Number.isFinite(Number(interactSrc[key])) ? Math.max(0, Math.round(Number(interactSrc[key]))) : 0;
+    }
     return {
       dayKey: typeof source.dayKey === 'string' ? source.dayKey : '',
       dayRounds: Number.isFinite(Number(source.dayRounds)) ? Math.max(0, Math.round(Number(source.dayRounds))) : 0,
       lastRunAt: typeof source.lastRunAt === 'string' ? source.lastRunAt : '',
       lastResult: source.lastResult && typeof source.lastResult === 'object' ? source.lastResult : null,
+      interact: interact,
+      interactLog: Array.isArray(source.interactLog) ? source.interactLog.slice(-MAX_INTERACT_LOG) : [],
+      lastReplyCheckAt: typeof source.lastReplyCheckAt === 'string' ? source.lastReplyCheckAt : '',
     };
   }
 
@@ -111,6 +130,11 @@ function createBiliStore(options) {
     if (state.dayKey !== today) {
       state.dayKey = today;
       state.dayRounds = 0;
+      state.interact = emptyInteract();
+      writeJson(stateFile, state);
+    }
+    if (state.interact.dayKey !== today) {
+      state.interact = emptyInteract();
       writeJson(stateFile, state);
     }
     return JSON.parse(JSON.stringify(state));
@@ -258,12 +282,99 @@ function createBiliStore(options) {
     return out;
   }
 
+  // ===== 互动预算（#3：写操作的每日闸门）=====
+
+  /**
+   * 剩余额度。section.interact 的上限是配置，当日用量是状态；
+   * 单类上限为 0 表示这类禁用。recordInteract 里也会复查，防止并发轮把额度打穿。
+   */
+  function interactBudget(limits) {
+    const src = limits && typeof limits === 'object' ? limits : {};
+    const current = stateNow().interact;
+    const out = {};
+    const limitKeys = { likes: 'maxLikes', coins: 'maxCoins', favorites: 'maxFavorites', replies: 'maxReplies' };
+    for (let i = 0; i < INTERACT_TYPES.length; i += 1) {
+      const key = INTERACT_TYPES[i];
+      const limit = Math.max(0, Math.round(Number(src[limitKeys[key]]) || 0));
+      out[key] = { used: current[key], limit: limit, left: Math.max(0, limit - current[key]) };
+    }
+    return out;
+  }
+
+  function recordInteract(type, info) {
+    const key = String(type || '');
+    if (INTERACT_TYPES.indexOf(key) === -1) return null;
+    const at = clock();
+    const today = dayKeyOf(at);
+    if (state.dayKey !== today) {
+      state.dayKey = today;
+      state.dayRounds = 0;
+    }
+    if (state.interact.dayKey !== today) state.interact = emptyInteract();
+    state.interact.dayKey = today;
+    state.interact[key] += 1;
+    const entry = {
+      at: at.toISOString(),
+      type: key,
+      bvid: String((info && info.bvid) || ''),
+      detail: String((info && info.detail) || '').slice(0, 120),
+    };
+    state.interactLog.push(entry);
+    if (state.interactLog.length > MAX_INTERACT_LOG) state.interactLog = state.interactLog.slice(-MAX_INTERACT_LOG);
+    writeJson(stateFile, state);
+    return entry;
+  }
+
+  /** 通知去重：查过的消息 id 记下来，轻量轮只处理新到的 */
+  const notifiedFile = path.join(base, 'notified.json');
+  let notified = readJson(notifiedFile, {}, function () { return true; });
+
+  function hasNotified(id) {
+    return Object.prototype.hasOwnProperty.call(notified, String(id || ''));
+  }
+
+  function markNotified(ids) {
+    const list = Array.isArray(ids) ? ids : [];
+    let changed = false;
+    for (let i = 0; i < list.length; i += 1) {
+      const id = String(list[i] || '');
+      if (id === '' || hasNotified(id)) continue;
+      notified[id] = { at: clock().toISOString() };
+      changed = true;
+    }
+    const keys = Object.keys(notified);
+    if (keys.length > MAX_SEEN) {
+      keys.sort(function (a, b) { return String(notified[a].at).localeCompare(String(notified[b].at)); });
+      const drop = keys.slice(0, keys.length - MAX_SEEN);
+      for (let i = 0; i < drop.length; i += 1) delete notified[drop[i]];
+      changed = true;
+    }
+    if (changed) writeJson(notifiedFile, notified);
+    return changed;
+  }
+
+  function markReplyCheck(at) {
+    const when = at instanceof Date ? at : clock();
+    state.lastReplyCheckAt = when.toISOString();
+    writeJson(stateFile, state);
+  }
+
   return {
     base: base,
     outDir: outDir,
     digestDir: digestDir,
     historyPath: historyPath,
     state: stateNow,
+    interactBudget: interactBudget,
+    recordInteract: recordInteract,
+    interactLog: function (limit) {
+      const list = state.interactLog || [];
+      const cap = Number(limit) > 0 ? Number(limit) : 20;
+      return list.slice(-cap).reverse();
+    },
+    hasNotified: hasNotified,
+    markNotified: markNotified,
+    markReplyCheck: markReplyCheck,
     recordRun: recordRun,
     hasSeen: hasSeen,
     markSeen: markSeen,

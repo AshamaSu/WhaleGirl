@@ -56,6 +56,7 @@ function createBiliTools(api, options) {
     maxDaysOld: Number(opts.maxDaysOld) > 0 ? Number(opts.maxDaysOld) : 0,
   };
   const filterSeen = typeof opts.filterSeen === 'function' ? opts.filterSeen : null;
+  const isNewNotified = typeof opts.isNewNotified === 'function' ? opts.isNewNotified : null;
 
   function accept(item, args) {
     const minPlays = Number(args && args.minPlays) > 0 ? Number(args.minPlays) : defaults.minPlays;
@@ -64,6 +65,40 @@ function createBiliTools(api, options) {
     if (minPlays > 0 && item.play < minPlays) return false;
     if (maxDays > 0 && item.days >= 0 && item.days > maxDays) return false;
     return true;
+  }
+
+  // ===== 主人数据源与互动工具（#2/#3/#4）=====
+
+  const interact = opts.interact && typeof opts.interact === 'object' ? opts.interact : {};
+  const interactEnabled = interact.enabled === true;
+  const budget = typeof opts.budget === 'object' && opts.budget ? opts.budget : null;
+  const masterMid = String(opts.masterMid || '').trim();
+
+  function masterTag(mid) {
+    const value = String(mid || '');
+    return masterMid !== '' && value === masterMid ? '（主人）' : '';
+  }
+
+  const TYPE_NAMES = {
+    likes: '点赞',
+    coins: '投币',
+    favorites: '收藏',
+    replies: '回复',
+  };
+
+  /** 写工具的统一闸门：额度不够就给人话，绝不让模型白试一次接口 */
+  async function runWrite(type, cost, info, action) {
+    if (!interactEnabled) return '互动功能没开（features.bili.interact.enabled=false），跳过。';
+    if (!budget) return '额度服务没接上，跳过这次互动。';
+    if (budget.remaining(type) < cost) return '今天' + TYPE_NAMES[type] + '的额度用完了，这次没做。';
+    let result;
+    try {
+      result = await action();
+    } catch (err) {
+      return '没做成（' + (err && err.message ? err.message : err) + '）。别重试，换下一条。';
+    }
+    budget.record(type, cost, info);
+    return typeof result === 'string' ? result : '成了';
   }
 
   return [
@@ -161,6 +196,212 @@ function createBiliTools(api, options) {
         return list.map(function (item, index) {
           return (index + 1) + '. ' + (item.author || '匿名') + '（' + formatCount(item.like) + ' 赞）：' + item.content;
         }).join('\n');
+      },
+    },
+
+    // ---- 主人的兴趣（#2）----
+
+    {
+      name: 'bili_master_follows',
+      description: '看主人（' + (masterMid || '主人') + '）关注的 UP 列表。想顺着主人的口味找内容时先看这个。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ps: { type: 'number', description: '要几条，默认 20，最多 50' },
+        },
+      },
+      execute: async function (args) {
+        const list = await api.followings({ vmid: masterMid, ps: Math.min(50, Number(args.ps) || 20) });
+        if (list.length === 0) return '看不到主人的关注列表（可能设了隐私，或还没关注任何人）。';
+        return list.map(function (item, index) {
+          return (index + 1) + '. ' + (item.uname || '未知') + masterTag(item.mid) + (item.sign ? '：' + item.sign : '');
+        }).join('\n');
+      },
+    },
+    {
+      name: 'bili_master_feed',
+      description: '看主人最近的公开动态里出现的视频（他转发/投过/提过的）。这是了解主人最近在看什么的最直接窗口。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async function () {
+        const list = await api.masterDynamics({ vmid: masterMid });
+        if (list.length === 0) return '主人最近的动态里没有可见的视频（可能设了隐私）。';
+        return list.map(function (item, index) {
+          return (index + 1) + '. ' + item.bvid + ' | ' + item.title +
+            ' | UP：' + (item.author || '未知') +
+            ' | ' + (item.pubtext || '') + (item.desc ? '\n   动态说：' + item.desc : '');
+        }).join('\n');
+      },
+    },
+
+    // ---- 通知（#4）----
+
+    {
+      name: 'bili_check_replies',
+      description: '查「回复我的」通知：谁回复了我们的评论。主人的留言会标出来。这轮里新出现的要处理。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async function () {
+        const list = await api.msgfeedReplies({ ps: 10 });
+        if (list.length === 0) return '还没有人回复过我们的评论。';
+        return list.map(function (item, index) {
+          const isNew = isNewNotified && isNewNotified(item.id) ? '【新】' : '';
+          const root = item.rootRpid > 0 ? '（回复我们：' + item.rootText + '）' : '';
+          return (index + 1) + '. ' + isNew + item.fromName + masterTag(item.fromMid) + '：' + item.text +
+            ' ｜ 视频：' + (item.subjectTitle || item.bvid || '') +
+            ' ｜ bvid=' + (item.bvid || '') + ' ｜ oid=' + item.oid +
+            (item.rootRpid > 0 ? ' ｜ root_rpid=' + item.rootRpid : '') + root;
+        }).join('\n');
+      },
+    },
+
+    // ---- 互动写操作（#3）----
+
+    {
+      name: 'bili_like',
+      description: '给视频点赞。真看完了觉得好才点，一轮最多点几条由额度管着。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'BV 号' },
+          reason: { type: 'string', description: '一句话：为什么值得点' },
+        },
+        required: ['bvid', 'reason'],
+      },
+      execute: async function (args) {
+        const bvid = assertBvid(args.bvid);
+        return runWrite('likes', 1, { bvid: bvid, detail: '点赞：' + args.reason }, async function () {
+          await api.likeVideo({ bvid: bvid });
+          return bvid + ' 点赞成功';
+        });
+      },
+    },
+    {
+      name: 'bili_coin',
+      description: '给视频投币。掷色子决定投 1 枚还是 2 枚（默认 1）；一天最多投 2 枚，省着用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'BV 号' },
+          multiply: { type: 'number', description: '1 或 2 枚，掷色子定' },
+          reason: { type: 'string', description: '一句话：为什么值得投' },
+        },
+        required: ['bvid', 'reason'],
+      },
+      execute: async function (args) {
+        const bvid = assertBvid(args.bvid);
+        const multiply = Number(args.multiply) === 2 ? 2 : 1;
+        if (!interactEnabled) return '互动功能没开，跳过。';
+        if (!budget) return '额度服务没接上，跳过这次互动。';
+        if (budget.remaining('coins') < multiply) return '今天硬币额度不够了（剩 ' + budget.remaining('coins') + ' 枚），这次没投。';
+        try {
+          await api.coin({ bvid: bvid, multiply: multiply });
+          budget.record('coins', multiply, { bvid: bvid, detail: '投币' + multiply + '枚：' + args.reason });
+          return bvid + ' 投币 ' + multiply + ' 枚成功';
+        } catch (err) {
+          return '没投出去（' + (err && err.message ? err.message : err) + '）。别重试。';
+        }
+      },
+    },
+    {
+      name: 'bili_fav',
+      description: '收藏视频进默认收藏夹。值得回头再看才收。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'BV 号' },
+          reason: { type: 'string', description: '一句话：为什么值得收藏' },
+        },
+        required: ['bvid', 'reason'],
+      },
+      execute: async function (args) {
+        const bvid = assertBvid(args.bvid);
+        return runWrite('favorites', 1, { bvid: bvid, detail: '收藏：' + args.reason }, async function () {
+          await api.favorite({ bvid: bvid });
+          return bvid + ' 收藏成功';
+        });
+      },
+    },
+    {
+      name: 'bili_triple',
+      description: '一键三连（点赞+投币+收藏）。只在真心强烈推荐时用，会一次用掉三种额度和 2 枚硬币。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'BV 号' },
+          reason: { type: 'string', description: '一句话：为什么值得三连' },
+        },
+        required: ['bvid', 'reason'],
+      },
+      execute: async function (args) {
+        const bvid = assertBvid(args.bvid);
+        if (!interactEnabled) return '互动功能没开，跳过。';
+        if (!budget) return '额度服务没接上，跳过这次互动。';
+        if (budget.remaining('likes') < 1 || budget.remaining('favorites') < 1 || budget.remaining('coins') < 2) {
+          return '三连额度不够（点赞剩 ' + budget.remaining('likes') + '、硬币剩 ' + budget.remaining('coins') + '、收藏剩 ' + budget.remaining('favorites') + '），退而求其次单独点赞就行。';
+        }
+        try {
+          await api.triple({ bvid: bvid });
+          budget.record('likes', 1, { bvid: bvid, detail: '三连·点赞：' + args.reason });
+          budget.record('coins', 2, { bvid: bvid, detail: '三连·投币：' + args.reason });
+          budget.record('favorites', 1, { bvid: bvid, detail: '三连·收藏：' + args.reason });
+          return bvid + ' 三连成功（点赞+投币+收藏）';
+        } catch (err) {
+          return '没三连成（' + (err && err.message ? err.message : err) + '）。可以退而求其次只点赞。';
+        }
+      },
+    },
+    {
+      name: 'bili_comment',
+      description: '在视频下面发评论（用小鲸的口吻，短句），或楼中楼回复某条评论。给 UP 留言、回应网友、跟主人打招呼都用它。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'BV 号（通知里的回复有 bvid 就填这个）' },
+          aid: { type: 'number', description: '视频的 aid；只有通知里给 oid 没有 bvid 时用它' },
+          message: { type: 'string', description: '评论内容，小鲸的口吻，一两句话' },
+          rootRpid: { type: 'number', description: '楼中楼时填要回复的评论 rpid，直接评论就别填' },
+        },
+        required: ['message'],
+      },
+      execute: async function (args) {
+        const message = String(args.message || '').trim();
+        if (message === '') return '评论内容是空的，没发。';
+        const hasBvid = /^BV[0-9A-Za-z]{10}$/.test(String(args.bvid || '').trim());
+        const aid = Number(args.aid) || 0;
+        if (!hasBvid && !aid) return 'bvid/aid 都没有，发不出去。';
+        const key = hasBvid ? String(args.bvid).trim() : 'aid:' + aid;
+        return runWrite('replies', 1, { bvid: key, detail: '评论：' + message }, async function () {
+          const result = await api.reply(hasBvid
+            ? { bvid: String(args.bvid).trim(), message: message, rootRpid: Number(args.rootRpid) || 0 }
+            : { aid: aid, message: message, rootRpid: Number(args.rootRpid) || 0 });
+          return (Number(args.rootRpid) > 0 ? '楼中楼回复' : '评论') + '发送成功（rpid=' + result.rpid + '）：' + message;
+        });
+      },
+    },
+    {
+      name: 'bili_like_comment',
+      description: '给一条评论点赞（比如主人的留言）。需要 oid 和 rpid。',
+      parameters: {
+        type: 'object',
+        properties: {
+          oid: { type: 'number', description: '视频的 aid（评论区 oid）' },
+          rpid: { type: 'number', description: '评论的 rpid' },
+        },
+        required: ['oid', 'rpid'],
+      },
+      execute: async function (args) {
+        const oid = Number(args.oid) || 0;
+        const rpid = Number(args.rpid) || 0;
+        if (!oid || !rpid) return 'oid/rpid 不对，没点。';
+        return runWrite('likes', 1, { bvid: String(rpid), detail: '给评论点赞 oid=' + oid }, async function () {
+          await api.likeComment({ oid: oid, rpid: rpid });
+          return '评论点赞成功（rpid=' + rpid + '）';
+        });
       },
     },
   ];

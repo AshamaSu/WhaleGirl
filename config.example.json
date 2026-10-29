@@ -84,7 +84,22 @@
       // 子代理最多工具轮次，防跑飞烧钱
       "maxRounds": 8,
       // 是否把她口吻的播报推出来；false 只落报告
-      "announce": true
+      "announce": true,
+      // 轻量查「回复我的」的间隔（分钟），不占每日轮数
+      "replyCheckIntervalMinutes": 30,
+      // 互动（点赞/投币/收藏/评论）——写操作，必须显式打开
+      "interact": {
+        // 是否启用互动；false=子代理只有只读工具
+        "enabled": true,
+        // 每天最多点赞几次（含给评论点赞）
+        "maxLikes": 10,
+        // 每天最多投几枚硬币
+        "maxCoins": 2,
+        // 每天最多收藏几个
+        "maxFavorites": 3,
+        // 每天最多发几条评论/回复
+        "maxReplies": 5
+      }
     },
     // QQ 群聊智能体（未来独立仓库，配置位先留着）
     "qq": {

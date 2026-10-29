@@ -105,13 +105,15 @@ function createBiliClient(options) {
     const o = options || {};
     await acquire();
 
+    const method = String(o.method || 'GET').toUpperCase();
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
     let res;
     try {
       res = await fetchImpl(url, {
-        method: 'GET',
+        method: method,
         headers: headers(o.headers),
+        body: o.body || undefined,
         signal: controller ? controller.signal : undefined,
       });
     } catch (err) {
@@ -178,6 +180,8 @@ function createBiliClient(options) {
     return buvid3;
   }
 
+  let selfMid = String(auth.dedeUserId || '').trim();
+
   /** nav 里的 wbi key 六小时内不变，缓存起来省一次请求；-101（未登录）也带 key，所以接受它 */
   async function ensureNav() {
     const nowMs = clock().getTime();
@@ -186,9 +190,29 @@ function createBiliClient(options) {
     const result = await requestUrl(urlOf(NAV_PATH, ''), { acceptCodes: [-101] });
     const wbi = result.data && result.data.wbi_img;
     if (!wbi || !wbi.img_url || !wbi.sub_url) throw new BiliError('拿不到 wbi key（nav 里没有 wbi_img）', -3);
+    // nav 顺带告诉我们登录的是谁；cookie 里的 DedeUserID 只是兜底
+    if (result.data && Number(result.data.mid) > 0) selfMid = String(result.data.mid);
 
     navCache = { key: mixinKey(keyFromUrl(wbi.img_url), keyFromUrl(wbi.sub_url)), at: nowMs };
     return navCache.key;
+  }
+
+  /**
+   * 写操作（点赞/投币/评论…）统一走这里：POST 表单 + csrf。
+   * 没登录直接拒绝——写接口没 csrf 一定被 -101 拒，提前说人话。
+   */
+  async function post(pathname, params) {
+    if (!auth.sessdata || !auth.biliJct) throw new BiliError('B站账号没登录（缺 SESSDATA/bili_jct），写操作做不了', -101);
+    await ensureBuvid3();
+    const source = params && typeof params === 'object' ? Object.assign({}, params) : {};
+    source.csrf = auth.biliJct;
+    const body = buildQuery(source);
+    const result = await requestUrl(urlOf(pathname, ''), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: body,
+    });
+    return result.data;
   }
 
   /** 需要 wbi 签名的接口（搜索、部分 player 接口） */
@@ -210,11 +234,14 @@ function createBiliClient(options) {
   return {
     get: get,
     getSigned: getSigned,
+    post: post,
     fetchJson: fetchJson,
     ensureBuvid3: ensureBuvid3,
     ensureNav: ensureNav,
     hasLogin: function () { return !!auth.sessdata; },
     mid: function () { return auth.mid; },
+    /** 登录账号自己的 mid（收藏夹等"以自己名义"的接口用），nav 之后最准 */
+    selfMid: function () { return selfMid; },
     buvid3: function () { return buvid3; },
   };
 }

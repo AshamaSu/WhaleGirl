@@ -4,8 +4,8 @@ const { createBiliClient } = require('./vendor/client');
 const { createBiliApi } = require('./vendor/api');
 const { createBiliTools } = require('./vendor/tools');
 const { createBiliStore } = require('./store');
-const { runBiliRound } = require('./runner');
-const { shouldAutoRun } = require('./schedule');
+const { runBiliRound, runReplyCheckRound } = require('./runner');
+const { shouldAutoRun, shouldCheckReplies } = require('./schedule');
 const { buildAnnounceMessages, splitBubbles } = require('./runner');
 
 /** 能力配置段：与宿主「未声明=关闭」语义一致，但不再依赖宿主 settings */
@@ -54,6 +54,20 @@ function normalizeSection(raw) {
     dutyFile: String(src.dutyFile || '').trim(),
     requestIntervalMs: num(src.requestIntervalMs, 2000),
     timeoutMs: num(src.timeoutMs, 0),
+    replyCheckIntervalMinutes: num(src.replyCheckIntervalMinutes, 30),
+    interact: normalizeInteract(src.interact),
+  };
+}
+
+/** 互动段（#3）：enabled 默认关——写操作必须显式打开，防手滑 */
+function normalizeInteract(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    enabled: src.enabled === true,
+    maxLikes: Math.max(0, num(src.maxLikes, 10)),
+    maxCoins: Math.max(0, num(src.maxCoins, 2)),
+    maxFavorites: Math.max(0, num(src.maxFavorites, 3)),
+    maxReplies: Math.max(0, num(src.maxReplies, 5)),
   };
 }
 
@@ -119,13 +133,29 @@ function createBiliModule(options) {
         now: clock,
       });
       const api = opts.api || createBiliApi(client, { now: clock });
+      // 互动额度（#3）：包一层，模型侧只问"还剩几次"
+      const budget = {
+        remaining: function (type) {
+          const snapshot = store.interactBudget(section.interact);
+          return snapshot[type] ? snapshot[type].left : 0;
+        },
+        record: function (type, cost, info) {
+          for (let i = 0; i < Math.max(1, cost); i += 1) store.recordInteract(type, info);
+        },
+      };
+
       const tools = opts.tools || createBiliTools(api, {
         minPlays: section.minPlays,
         maxDaysOld: section.maxDaysOld,
         filterSeen: store.hasSeen,
+        interact: section.interact,
+        budget: budget,
+        masterMid: typeof client.mid === 'function' ? client.mid() : '',
+        isNewNotified: store.hasNotified,
       });
 
       let timer = null;
+      let replyTimer = null;
       let running = false;
       let lastResult = null;
 
@@ -230,6 +260,33 @@ function createBiliModule(options) {
         });
       }
 
+      /** 轻量查回复（#4）：不占浏览轮额度；没登录就不白跑 */
+      let replyChecking = false;
+      function tickReplies() {
+        if (running || replyChecking) return;
+        if (client.hasLogin && !client.hasLogin()) return;
+        const gate = shouldCheckReplies({ state: store.state(), section: section, now: clock() });
+        if (!gate.run) return;
+        logger.log('[bili] ' + gate.reason);
+        replyChecking = true;
+        const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
+        runReplyCheckRound({
+          store: store,
+          section: section,
+          api: api,
+          tools: tools,
+          runAgent: runAgent,
+          masterMid: typeof client.mid === 'function' ? client.mid() : '',
+          logger: logger,
+          now: clock,
+          timeoutMs: ctx.getConfig().requestTimeoutMs,
+        }).catch(function (err) {
+          logger.warn('[bili] 查回复一轮失败：' + (err && err.message ? err.message : err));
+        }).then(function () {
+          replyChecking = false;
+        });
+      }
+
       ctx.route('GET', '/api/features/bili/state', function (req, res) {
         ctx.sendJson(res, 200, {
           ok: true,
@@ -240,6 +297,12 @@ function createBiliModule(options) {
           seen: store.seenLines(200).length,
           login: client.hasLogin ? client.hasLogin() : false,
           mid: typeof client.mid === 'function' ? client.mid() : '',
+          interact: {
+            section: section.interact,
+            budget: store.interactBudget(section.interact),
+            log: store.interactLog(20),
+          },
+          lastReplyCheckAt: store.state().lastReplyCheckAt || '',
         });
       });
 
@@ -261,11 +324,15 @@ function createBiliModule(options) {
 
       timer = setInterval(tick, TICK_MS);
       if (timer && typeof timer.unref === 'function') timer.unref();
+      replyTimer = setInterval(tickReplies, TICK_MS);
+      if (replyTimer && typeof replyTimer.unref === 'function') replyTimer.unref();
 
       return {
         stop: function () {
           if (timer) clearInterval(timer);
           timer = null;
+          if (replyTimer) clearInterval(replyTimer);
+          replyTimer = null;
         },
         runOnce: runOnce,
         state: store.state,
@@ -279,6 +346,7 @@ function createBiliModule(options) {
 module.exports = {
   createBiliModule: createBiliModule,
   normalizeSection: normalizeSection,
+  normalizeInteract: normalizeInteract,
   historyPrompt: historyPrompt,
   TICK_MS: TICK_MS,
 };

@@ -91,7 +91,39 @@ function shouldAutoRun(options) {
   return { run: true, reason: '到点了' };
 }
 
+/**
+ * 轻量查回复的节拍（#4）：跟浏览轮分开，间隔到了、在活跃时段就查一眼。
+ * 只看通知列表，没新东西不花模型的 token。
+ */
+function shouldCheckReplies(options) {
+  const opts = options || {};
+  const section = opts.section || {};
+  const state = opts.state || {};
+  const now = opts.now instanceof Date ? opts.now : new Date();
+
+  const interact = section.interact && typeof section.interact === 'object' ? section.interact : {};
+  if (interact.enabled !== true) return { run: false, reason: '互动功能没开' };
+
+  if (!inActiveWindows(now, section.activeWindows, section.weekendAllDay)) {
+    return { run: false, reason: '不在活跃时段' };
+  }
+
+  const interval = Number(section.replyCheckIntervalMinutes);
+  const gapMin = Number.isFinite(interval) && interval > 0 ? interval : 30;
+  if (state.lastReplyCheckAt) {
+    const last = new Date(state.lastReplyCheckAt).getTime();
+    if (Number.isFinite(last)) {
+      const gap = now.getTime() - last;
+      if (gap < gapMin * 60000) {
+        return { run: false, reason: '距上次查回复不到 ' + gapMin + ' 分钟' };
+      }
+    }
+  }
+  return { run: true, reason: '到点查回复了' };
+}
+
 module.exports = {
+  shouldCheckReplies: shouldCheckReplies,
   parseClock: parseClock,
   parseWindow: parseWindow,
   inWindow: inWindow,

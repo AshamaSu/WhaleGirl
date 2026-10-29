@@ -203,12 +203,199 @@ function createBiliApi(client, options) {
     });
   }
 
+
+  // ===== 主人的公开数据源（#2：跟着主人的兴趣浏览）=====
+
+  /** 主人关注的 UP 列表（对方没关隐私才有；拉不到就是结果，不是故障） */
+  async function followings(params) {
+    const p = params || {};
+    const vmid = Number(p.vmid) > 0 ? Number(p.vmid) : 0;
+    if (!vmid) throw new BiliError('followings 需要 vmid（主人的 mid）', 0);
+    const ps = Math.min(50, Math.max(1, Number(p.ps) || 20));
+    const data = await client.get('/x/relation/followings', { vmid: vmid, ps: ps, order: 'attention' });
+    const list = data && Array.isArray(data.list) ? data.list : [];
+    return list.map(function (item) {
+      return {
+        mid: Number(item.mid) || 0,
+        uname: String((item.uname || (item.space && item.space.name)) || ''),
+        sign: trimText(item.sign, 60),
+        official: String((item.official_verify && item.official_verify.desc) || ''),
+      };
+    });
+  }
+
+  /**
+   * 主人的公开动态里的视频（转发/投稿/收藏的都可能出现在这）。
+   * 动态结构很深且常变，全用兜底解析：拿不到就跳过这条，不让一条坏数据炸掉整页。
+   */
+  async function masterDynamics(params) {
+    const p = params || {};
+    const vmid = Number(p.vmid) > 0 ? Number(p.vmid) : 0;
+    if (!vmid) throw new BiliError('masterDynamics 需要 vmid（主人的 mid）', 0);
+
+    const data = await client.get('/x/polymer/web-dynamic/v1/feed', { host_mid: vmid });
+    const items = data && data.items && Array.isArray(data.items) ? data.items : [];
+    const out = [];
+    for (let i = 0; i < items.length && out.length < 20; i += 1) {
+      const entry = items[i] || {};
+      const modules = entry.modules || {};
+      const dynamic = modules.module_dynamic || {};
+      const major = dynamic.major || {};
+      const archive = major.archive || {};
+      const bvid = String(archive.bvid || '');
+      if (bvid === '') continue;
+      const author = modules.module_author || {};
+      const stat = archive.stat || {};
+      out.push({
+        bvid: bvid,
+        aid: Number(archive.aid) || 0,
+        title: stripTags(archive.title),
+        author: String((author.name || archive.upname) || ''),
+        play: Number(stat.play) || 0,
+        like: Number(stat.like) || 0,
+        seconds: toSeconds(archive.duration_text),
+        pubtext: String(author.pub_time || ''),
+        desc: trimText(dynamic.desc ? dynamic.desc.text : '', MAX_DESC_CHARS),
+      });
+    }
+    return out;
+  }
+
+  // ===== 通知（#4：谁回复了我们）=====
+
+  /**
+   * 「回复我的」消息列表。B站这层字段名不保证稳定，全部兜底取值：
+   * 关键要拿到 回复人、说了什么、在哪条视频（oid）、对着哪条评论（root rpid）。
+   */
+  async function msgfeedReplies(params) {
+    const p = params || {};
+    const ps = Math.min(20, Math.max(1, Number(p.ps) || 10));
+    const data = await client.get('/x/msgfeed/reply', { build: 0, mimetype: 'web', ps: ps, type: 'all' });
+    const items = data && data.items && Array.isArray(data.items) ? data.items : [];
+    return items.map(function (entry) {
+      const e = entry || {};
+      const user = e.user || {};
+      const item = e.item || {};
+      const subject = item.subject || {};
+      const rootReply = item.root_reply || item.root || {};
+      const content = item.reply_content || item.content || {};
+      return {
+        id: String(e.id || item.reply_id || (item.rpid + '') || ''),
+        fromMid: Number(user.mid) || 0,
+        fromName: String(user.uname || ''),
+        text: trimText(content.message, 200),
+        oid: Number(subject.oid || subject.pid || item.business_id) || 0,
+        bvid: String(subject.bvid || ''),
+        subjectTitle: stripTags(subject.title || ''),
+        rootRpid: Number(rootReply.rpid || item.root_rpid) || 0,
+        rootText: trimText(rootReply.content ? rootReply.content.message : (item.source_content || ''), 100),
+        timeAt: String(item.time_at || ''),
+      };
+    }).filter(function (item) { return item.id !== '' && (item.oid > 0 || item.rootRpid > 0); });
+  }
+
+  // ===== 写操作（#3：互动）。都要求登录，csrf 由 client.post 统一带 =====
+
+  /** 给视频点赞（like=1）。已经点过赞的接口会报错，调用方把错误翻译给人话 */
+  async function likeVideo(params) {
+    const bvid = assertBvid(params && params.bvid);
+    return client.post('/x/web-interface/archive/like', { bvid: bvid, like: 1 });
+  }
+
+  /** 投币：multiply 是 1 或 2 枚，select_like=0 表示顺手点赞由点赞接口单独管 */
+  async function coin(params) {
+    const bvid = assertBvid(params && params.bvid);
+    const multiply = Number(params && params.multiply) === 2 ? 2 : 1;
+    return client.post('/x/web-interface/coin/add', { bvid: bvid, multiply: multiply, select_like: 0 });
+  }
+
+  /** 一键三连：点赞 + 投币 + 收藏一把梭；硬币不够时 B站会部分成功，结果原样返回 */
+  async function triple(params) {
+    const bvid = assertBvid(params && params.bvid);
+    return client.post('/x/web-interface/archive/like/triple', { bvid: bvid });
+  }
+
+  /** 收藏进默认收藏夹：没有收藏夹就先建一个，之后一直用同一个 */
+  let favFolderCache = null;
+  async function ensureFavFolder() {
+    if (favFolderCache) return favFolderCache;
+    const mid = Number(typeof client.selfMid === 'function' ? client.selfMid() : 0) || 0;
+    if (!mid) throw new BiliError('不知道自己的 mid，建不了收藏夹（先跑一轮带登录的请求）', 0);
+
+    const list = await client.get('/x/v3/fav/folder/created/list-all', { up_mid: mid });
+    const folders = list && Array.isArray(list.list) ? list.list : [];
+    if (folders.length > 0 && Number(folders[0].id) > 0) {
+      favFolderCache = { id: Number(folders[0].id), title: String(folders[0].title || '') };
+      return favFolderCache;
+    }
+    await client.post('/x/v3/fav/folder/add', { title: '小鲸觉得好', intro: '小鲸自己收藏的', privacy: 0 });
+    const again = await client.get('/x/v3/fav/folder/created/list-all', { up_mid: mid });
+    const made = again && Array.isArray(again.list) ? again.list : [];
+    if (made.length === 0 || !Number(made[0].id)) throw new BiliError('收藏夹建了但查不到', 0);
+    favFolderCache = { id: Number(made[0].id), title: String(made[0].title || '') };
+    return favFolderCache;
+  }
+
+  async function favorite(params) {
+    const bvid = assertBvid(params && params.bvid);
+    const info = await video({ bvid: bvid });
+    if (!info.aid) throw new BiliError('拿不到 aid，没法收藏：' + bvid, -404);
+    const folder = await ensureFavFolder();
+    return client.post('/x/v3/fav/resource/deal', {
+      rid: info.aid,
+      type: 2,
+      add_media_ids: folder.id,
+      del_media_ids: '',
+    });
+  }
+
+  /** 发评论：root>0 时是楼中楼回复某人；bvid/aid 二选一（通知里只有 oid 时走 aid） */
+  async function reply(params) {
+    const p = params || {};
+    const message = String(p.message == null ? '' : p.message).trim();
+    if (message === '') throw new BiliError('评论内容不能为空', 0);
+    if (message.length > 300) throw new BiliError('评论太长（' + message.length + ' 字），压到 300 字以内', 0);
+    let aid = Number(p.aid) || 0;
+    if (!aid) {
+      const bvid = assertBvid(p.bvid);
+      const info = await video({ bvid: bvid });
+      if (!info.aid) throw new BiliError('拿不到 aid，没法评论：' + bvid, -404);
+      aid = info.aid;
+    }
+    const body = { oid: aid, type: 1, message: message };
+    const root = Number(p.rootRpid) || 0;
+    if (root > 0) {
+      body.root = root;
+      body.parent = root;
+    }
+    const data = await client.post('/x/v2/reply/add', body);
+    return data && Number(data.rpid) > 0 ? { rpid: Number(data.rpid) } : { rpid: 0 };
+  }
+
+  /** 给评论点赞（action=1）；用来给主人的留言捧场 */
+  async function likeComment(params) {
+    const p = params || {};
+    const oid = Number(p.oid) || 0;
+    const rpid = Number(p.rpid) || 0;
+    if (!oid || !rpid) throw new BiliError('likeComment 需要 oid 和 rpid', 0);
+    return client.post('/x/v2/reply/action', { oid: oid, type: 1, rpid: rpid, action: 1 });
+  }
+
   return {
     popular: popular,
     search: search,
     video: video,
     subtitle: subtitle,
     comments: comments,
+    followings: followings,
+    masterDynamics: masterDynamics,
+    msgfeedReplies: msgfeedReplies,
+    likeVideo: likeVideo,
+    coin: coin,
+    triple: triple,
+    favorite: favorite,
+    reply: reply,
+    likeComment: likeComment,
   };
 }
 
