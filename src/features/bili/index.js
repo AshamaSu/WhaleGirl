@@ -218,6 +218,7 @@ function createBiliModule(options) {
           lastResult: lastResult ? { ok: lastResult.ok, trigger: lastResult.trigger, picked: lastResult.picked, error: lastResult.error, at: lastResult.at } : null,
           seen: store.seenLines(200).length,
           login: client.hasLogin ? client.hasLogin() : false,
+          mid: typeof client.mid === 'function' ? client.mid() : '',
         });
       });
 

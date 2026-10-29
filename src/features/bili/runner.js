@@ -116,6 +116,10 @@ async function runBiliRound(options) {
 
     const body = String(finalText || '').trim();
     if (body === '') throw new Error('子代理没有产出报告（可能模型直接空回复）');
+    // 工具轮次用尽后，DeepSeek 有时会以 DSML 文本形式再要一次工具；这段不能当报告落盘
+    if (/｜｜DSML｜｜/.test(body)) {
+      throw new Error('模型把工具调用写成了文本（DSML），本轮作废；通常是工具轮次用尽后仍想继续调用');
+    }
 
     report = sectionReport(header, body);
     picked = parsePicked(body);

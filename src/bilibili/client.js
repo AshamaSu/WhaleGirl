@@ -60,6 +60,8 @@ function createBiliClient(options) {
     sessdata: String(opts.sessdata || env.WG_BILI_SESSDATA || '').trim(),
     biliJct: String(opts.biliJct || env.WG_BILI_BILI_JCT || '').trim(),
     dedeUserId: String(opts.dedeUserId || env.WG_BILI_DEDE_USER_ID || '').trim(),
+    // 主人的 B站账号 mid：只从 .env 读，不写进 config.json
+    mid: String(opts.mid || env.WG_BILI_MID || '').trim(),
   };
 
   let buvid3 = String(opts.buvid3 || env.WG_BILI_BUVID3 || '').trim();
@@ -212,6 +214,7 @@ function createBiliClient(options) {
     ensureBuvid3: ensureBuvid3,
     ensureNav: ensureNav,
     hasLogin: function () { return !!auth.sessdata; },
+    mid: function () { return auth.mid; },
     buvid3: function () { return buvid3; },
   };
 }

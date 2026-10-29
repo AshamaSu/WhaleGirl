@@ -55,6 +55,21 @@ function setup(overrides) {
   return { root: root, store: store, options: options, logs: logs };
 }
 
+test('模型把工具调用写成 DSML 文本时本轮判失败，不落脏报告', async function () {
+  const env = setup({ runAgent: fakeAgent([
+    { type: 'final', text: '<｜｜DSML｜｜ calls>' + String.fromCharCode(10) + '<｜｜DSML｜｜ invoke name="bili_subtitle">' },
+  ]) });
+
+  const result = await runBiliRound(env.options);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /DSML/);
+  assert.deepEqual(result.picked, []);
+
+  const text = fs.readFileSync(env.store.reportPath(FIXED), 'utf8');
+  assert.match(text, /本轮失败/);
+  assert.ok(text.indexOf('<｜｜DSML｜｜ invoke') === -1, '脏文本不能进报告');
+});
+
 test('parsePicked 只认顶格的 ### BV 行', function () {
   assert.deepEqual(parsePicked(REPORT), ['BV1gExu6GEjZ', 'BV1aaaaaaaaa']);
   assert.deepEqual(parsePicked('  ### BV1gExu6GEjZ'), []);
