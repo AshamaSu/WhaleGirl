@@ -172,8 +172,9 @@ function createBiliModule(options) {
             }),
             Math.min(MAX_ANNOUNCE_BUBBLES, (composed.reply && composed.reply.maxBubbles) || MAX_ANNOUNCE_BUBBLES)
           );
+          const roundId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
           for (let i = 0; i < bubbles.length; i += 1) {
-            ctx.pushText(bubbles[i], { kind: 'broadcast', source: 'bili' });
+            ctx.pushText(bubbles[i], { kind: 'broadcast', source: 'bili', roundId: roundId });
           }
           logger.log('[bili] 已播报 ' + bubbles.length + ' 条');
           return bubbles;

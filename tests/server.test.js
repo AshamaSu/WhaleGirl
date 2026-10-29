@@ -541,3 +541,51 @@ test('关闭能力后下一次请求就撤路由（不依赖别的请求触发 s
     await srv.close();
   }
 });
+test('dispatchInbound：入站落会话并经注册渠道回话', async function () {
+  const config = baseConfig({ features: { inbox: { enabled: true } } });
+  const sent = [];
+  let inboundResult = null;
+  const inbox = {
+    name: 'inbox',
+    enabled: function (c) { return !!(c.features && c.features.inbox && c.features.inbox.enabled); },
+    init: function (ctx) {
+      ctx.registerChannel('test', function (out) { sent.push(out); });
+      ctx.route('POST', '/api/inbox/test', async function (req, res) {
+        const body = await ctx.readJson(req);
+        inboundResult = await ctx.dispatchInbound({
+          source: 'test',
+          chat: { platform: 'test', id: 'g1', type: 'group', title: '测试群' },
+          sender: { id: 'u1', name: '主人' },
+          text: body.text,
+        });
+        ctx.sendJson(res, 200, inboundResult);
+      });
+      return { stop: function () {} };
+    },
+  };
+
+  const srv = await start(config, {
+    featureModules: [inbox],
+    loadEnvFile: function () { return {}; },
+    streamChatEvents: fakeEvents(['你好呀']),
+  });
+
+  try {
+    const res = await fetch(srv.base + '/api/inbox/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '在吗' }),
+    });
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.ok, true);
+    assert.strictEqual(body.text, '你好呀');
+    assert.ok(body.sessionId.indexOf('test_') === 0, '会话按 platform_类型_chatId 生成');
+
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].chatId, 'g1');
+    assert.strictEqual(sent[0].text, '你好呀');
+  } finally {
+    await srv.close();
+  }
+});

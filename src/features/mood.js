@@ -353,6 +353,26 @@ function createMoodModule(options) {
       });
       const llmFor = typeof opts.llm === 'function' ? opts.llm : function () { return ctx.makeLlm(); };
 
+      // 自言自语（播报/搭话）的小幅情绪：按 roundId 去重，一轮多气泡只加一次
+      const selfPostSeen = new Map();
+      ctx.bus.on('selfPost', function (payload) {
+        const p = payload || {};
+        const key = String(p.roundId || '');
+        if (key === '') return;
+        if (selfPostSeen.has(key)) return;
+        selfPostSeen.set(key, nowIso());
+        if (selfPostSeen.size > 50) {
+          const oldest = selfPostSeen.keys().next().value;
+          selfPostSeen.delete(oldest);
+        }
+        try {
+          const entry = store.apply(2, '分享了B站内容（' + String(p.source || '') + '）');
+          ctx.logger.log('[mood] selfPost +' + entry.delta + ' → ' + entry.value + '（' + key + '）');
+        } catch (err) {
+          ctx.logger.warn('[mood] selfPost 处理失败：' + (err && err.message ? err.message : err));
+        }
+      });
+
       ctx.addPromptBlock(function () {
         return buildPromptBlock(store.snapshot(24));
       });

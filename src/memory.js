@@ -131,15 +131,32 @@ function openMemory(options) {
     file: file,
     settings: settings,
 
-    appendTurn(role, content) {
+    appendTurn(role, content, opts) {
       const text = String(content == null ? '' : content).trim();
       if (text === '') return null;
+      const self = !!(opts && opts.self === true);
       const turn = { role: role === 'assistant' ? 'assistant' : 'user', content: text, at: nowIso() };
+      if (self) turn.self = true;
       data.turns.push(turn);
       data.stats.turns += 1;
-      decayFacts();
+      // 自言自语不参与事实衰减：衰减只由真实对话驱动
+      if (!self) decayFacts();
       save();
       return turn;
+    },
+
+    /** 她的主动播报：进短期记忆，但不衰减事实、不进事实抽取 */
+    appendSelfTurn(content) {
+      return this.appendTurn('assistant', content, { self: true });
+    },
+
+    /** 排除自言自语后的最近对话（事实抽取/摘要口径用） */
+    recentDialogueTurns(limit) {
+      const count = limit || settings.keepRecentTurns;
+      const dialogue = data.turns.filter(function (turn) { return turn.self !== true; });
+      return dialogue.slice(Math.max(0, dialogue.length - count)).map(function (turn) {
+        return { role: turn.role, content: turn.content };
+      });
     },
 
     recentTurns(limit) {
@@ -231,12 +248,16 @@ function openMemory(options) {
     },
 
     shouldSummarize() {
-      return data.turns.length > settings.maxTurns;
+      // 自言自语不计入压缩触发：播报再多也不该把真实对话挤掉
+      const dialogue = data.turns.filter(function (turn) { return turn.self !== true; });
+      return dialogue.length > settings.maxTurns;
     },
 
     turnsToSummarize() {
-      const cut = data.turns.length - settings.keepRecentTurns;
-      return cut > 0 ? data.turns.slice(0, cut) : [];
+      // 要压缩的素材排除自言自语：她的播报不该进摘要
+      const dialogue = data.turns.filter(function (turn) { return turn.self !== true; });
+      const cut = dialogue.length - settings.keepRecentTurns;
+      return cut > 0 ? dialogue.slice(0, cut) : [];
     },
 
     applySummary(summaryText, dropCount) {

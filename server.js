@@ -207,7 +207,7 @@ function scheduleMemoryWork(options) {
         options.logger.log('[memory] 已压缩 ' + turns.length + ' 条旧对话');
       }
 
-      const recent = memory.recentTurns(2);
+      const recent = memory.recentDialogueTurns(2);
       const facts = await extractFacts(llm, recent);
       for (let i = 0; i < facts.length; i += 1) memory.addFact(facts[i], 'auto');
       if (facts.length > 0) options.logger.log('[memory] 记住：' + facts.join(' / '));
@@ -350,6 +350,17 @@ function createServer(config, deps) {
         target: to ? undefined : 'web',
       };
       bus.emit('push', msg);
+      // P2f-1b：她主动说的进主会话短期记忆（self turn），并通知心情模块；只对 broadcast 生效
+      if (msg.kind === 'broadcast') {
+        const roundId = m.roundId || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+        try {
+          const memory = openMemory({ root: dataRoot, sessionId: 'main', settings: resolveLive().config.memory });
+          memory.appendSelfTurn(msg.text);
+        } catch (err) {
+          logger.warn('[features] 播报落记忆失败：' + (err && err.message ? err.message : err));
+        }
+        bus.emit('selfPost', { source: msg.source, roundId: roundId, text: msg.text });
+      }
       return msg;
     },
     /** 插件数据目录：<dataRoot>/data/plugins/<name>，保证存在 */
