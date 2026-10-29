@@ -12,3 +12,7 @@ img/
 node_modules/
 .DS_Store
 .workbuddy/
+
+# 事件备份（本地保留，不入库）
+backups/
+config.json.bak*
