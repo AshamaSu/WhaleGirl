@@ -44,6 +44,17 @@ function fakeCtx(overrides) {
         return '第一条像样的话\n\n第二条接下去';
       };
     },
+    pushText: function (text, meta) {
+      bus.emit('push', { target: 'web', text: text, source: (meta && meta.source) || 'plugin' });
+    },
+    persona: {
+      compose: function () {
+        return { messages: [{ role: 'system', content: '测试人设' }], reply: { maxBubbles: 3 } };
+      },
+    },
+    makeAgent: function () {
+      throw new Error('测试应直接传 runAgent');
+    },
     getConfig: function () { return config; },
     getEnv: function () { return env; },
     route: function (method, pathname, handler) {

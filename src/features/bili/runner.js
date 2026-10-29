@@ -1,7 +1,6 @@
 'use strict';
 
 const { buildDuty } = require('./duty');
-const { runAgent: defaultRunAgent } = require('../../agent');
 
 const DEFAULT_MAX_ROUNDS = 8;
 const MAX_ANNOUNCE_CHARS = 2000;
@@ -76,7 +75,8 @@ async function runBiliRound(options) {
   const section = opts.section || {};
   const logger = opts.logger || console;
   const clock = typeof opts.now === 'function' ? opts.now : function () { return new Date(); };
-  const agent = typeof opts.runAgent === 'function' ? opts.runAgent : defaultRunAgent;
+  if (typeof opts.runAgent !== 'function') throw new Error('runBiliRound 需要 runAgent（由宿主 makeAgent 提供）');
+  const agent = opts.runAgent;
   const at = clock();
   const trigger = opts.trigger === 'auto' ? 'auto' : 'manual';
   const header = '## ' + store.stamp(at) + ' · ' + triggerText(trigger);

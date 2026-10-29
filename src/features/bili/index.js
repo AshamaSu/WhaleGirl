@@ -1,15 +1,19 @@
 'use strict';
 
-const { isEnabled, sectionOf } = require('../settings');
-const { createBiliClient } = require('../../bilibili/client');
-const { createBiliApi } = require('../../bilibili/api');
-const { createBiliTools } = require('../../bilibili/tools');
+const { createBiliClient } = require('./vendor/client');
+const { createBiliApi } = require('./vendor/api');
+const { createBiliTools } = require('./vendor/tools');
 const { createBiliStore } = require('./store');
 const { runBiliRound } = require('./runner');
 const { shouldAutoRun } = require('./schedule');
-const { loadPersona, buildMessages } = require('../../persona');
 const { buildAnnounceMessages, splitBubbles } = require('./runner');
-const { resolveProvider } = require('../../config');
+
+/** 能力配置段：与宿主「未声明=关闭」语义一致，但不再依赖宿主 settings */
+function featureSection(config) {
+  const features = config && config.features;
+  const section = features && features.bili;
+  return section && typeof section === 'object' && !Array.isArray(section) ? section : null;
+}
 
 const TICK_MS = 60 * 1000;
 const DEFAULT_INTERVAL_MINUTES = 180;
@@ -89,11 +93,14 @@ function createBiliModule(options) {
 
   return {
     name: 'bili',
-    enabled: function (config) { return isEnabled(config, 'bili'); },
+    enabled: function (config) {
+      const section = featureSection(config);
+      return !!(section && section.enabled === true);
+    },
 
     init: function (ctx) {
       const config = ctx.getConfig();
-      const section = normalizeSection(sectionOf(config, 'bili'));
+      const section = normalizeSection(featureSection(config));
       const logger = ctx.logger || console;
       const clock = typeof opts.now === 'function' ? opts.now : function () { return new Date(); };
 
@@ -131,6 +138,19 @@ function createBiliModule(options) {
         }
       }
 
+      /** 子代理循环由宿主提供，插件不接触 provider */
+      function buildAgent() {
+        if (typeof ctx.makeAgent !== 'function') throw new Error('宿主没有 makeAgent');
+        const run = ctx.makeAgent({ tools: tools });
+        return function (options) {
+          return run(options.messages, {
+            maxRounds: options.maxRounds,
+            temperature: options.temperature,
+            timeoutMs: options.timeoutMs,
+          });
+        };
+      }
+
       /** 播报：报告进主娘的眼睛，出来的是她自己的话；失败只丢这一环 */
       async function announce(result) {
         if (section.announce === false) return [];
@@ -141,17 +161,19 @@ function createBiliModule(options) {
         if (typeof llm !== 'function') return [];
 
         try {
-          const live = ctx.getConfig();
-          const persona = loadPersona(live.personaPath);
+          if (!ctx.persona || typeof ctx.persona.compose !== 'function') {
+            throw new Error('宿主没有 persona.compose');
+          }
+          const composed = ctx.persona.compose('', { history: false, memory: false, features: false });
           const bubbles = splitBubbles(
             await llm({
-              messages: buildAnnounceMessages(buildMessages(persona, []), result.report),
+              messages: buildAnnounceMessages(composed.messages, result.report),
               temperature: 0.9,
             }),
-            Math.min(MAX_ANNOUNCE_BUBBLES, persona.reply.maxBubbles || MAX_ANNOUNCE_BUBBLES)
+            Math.min(MAX_ANNOUNCE_BUBBLES, (composed.reply && composed.reply.maxBubbles) || MAX_ANNOUNCE_BUBBLES)
           );
           for (let i = 0; i < bubbles.length; i += 1) {
-            ctx.bus.emit('push', { target: 'web', text: bubbles[i], source: 'bili' });
+            ctx.pushText(bubbles[i], { kind: 'broadcast', source: 'bili' });
           }
           logger.log('[bili] 已播报 ' + bubbles.length + ' 条');
           return bubbles;
@@ -166,13 +188,12 @@ function createBiliModule(options) {
         running = true;
         try {
           const live = ctx.getConfig();
-          const provider = opts.provider || resolveProvider(live);
+          const runAgent = typeof opts.runAgent === 'function' ? opts.runAgent : buildAgent();
           const result = await runBiliRound({
             root: ctx.root,
             store: store,
             section: section,
             tools: tools,
-            provider: provider,
             trigger: trigger === 'auto' ? 'auto' : 'manual',
             logger: logger,
             now: clock,
@@ -183,7 +204,6 @@ function createBiliModule(options) {
           if (result.ok && Array.isArray(result.items) && result.items.length > 0) {
             store.appendHistory(result.items, { at: result.at, trigger: result.trigger });
           }
-          ctx.bus.emit('bili-report', { report: result.report, picked: result.picked, ok: result.ok });
           if (result.ok) {
             result.bubbles = await announce(result);
           }

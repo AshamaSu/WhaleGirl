@@ -31,6 +31,8 @@ function createFeatureHost(options) {
   const running = new Map();      // name -> { module, handle }
   const states = new Map();       // name -> { enabled, error }
   const routes = new Map();       // name -> [{ method, pathname, handler }]
+  const tools = new Map();        // name -> [toolDef]
+  const channels = new Map();     // name -> { channel, send }
   const promptBlocks = new Map(); // name -> [fn]
   const afterReplyHooks = new Map(); // name -> [fn]
 
@@ -66,6 +68,26 @@ function createFeatureHost(options) {
       list.push(fn);
       afterReplyHooks.set(name, list);
     };
+    // 插件注册给主对话的工具：必须带命名空间 plugin_<name>_，防撞名
+    facade.addTool = function (def) {
+      if (!def || typeof def !== 'object' || typeof def.name !== 'string') return;
+      if (def.name.indexOf('plugin_' + name + '_') !== 0) {
+        warn('[features] ' + name + ' 的工具名必须以 plugin_' + name + '_ 开头：' + def.name);
+        return;
+      }
+      const list = tools.get(name) || [];
+      if (list.some(function (item) { return item.name === def.name; })) {
+        warn('[features] ' + name + ' 重复注册工具：' + def.name);
+        return;
+      }
+      list.push(def);
+      tools.set(name, list);
+    };
+    // 渠道插件注册发送函数：name 必须等于消息里的 source
+    facade.registerChannel = function (channelName, send) {
+      if (typeof channelName !== 'string' || channelName === '' || typeof send !== 'function') return;
+      channels.set(name, { channel: channelName, send: send });
+    };
     return facade;
   }
 
@@ -73,6 +95,28 @@ function createFeatureHost(options) {
     routes.delete(name);
     promptBlocks.delete(name);
     afterReplyHooks.delete(name);
+    tools.delete(name);
+    channels.delete(name);
+  }
+
+  /** 已启用插件注册的工具（按运行顺序拼平） */
+  function allTools() {
+    const out = [];
+    running.forEach(function (entry, name) {
+      const list = tools.get(name) || [];
+      for (let i = 0; i < list.length; i += 1) out.push(list[i]);
+    });
+    return out;
+  }
+
+  /** 按渠道名取发送函数（name 必须等于 source） */
+  function channelSend(channel) {
+    let found = null;
+    running.forEach(function (entry, name) {
+      const item = channels.get(name);
+      if (item && item.channel === channel) found = item.send;
+    });
+    return found;
   }
 
   function start(name, module, config) {
@@ -229,6 +273,8 @@ function createFeatureHost(options) {
     promptText: promptText,
     afterReply: afterReply,
     running: runningNames,
+    tools: allTools,
+    channelSend: channelSend,
     stopAll: stopAll,
   };
 }

@@ -282,6 +282,106 @@ function createServer(config, deps) {
       const live = resolveLive();
       return buildLlmText(live.provider, live.config.requestTimeoutMs);
     },
+    /** 插件内的子代理循环：provider 由宿主绑定，插件只给工具与调用参数 */
+    makeAgent: function (opts) {
+      const toolList = (opts && opts.tools) || [];
+      return function (messages, runOpts) {
+        const live = resolveLive();
+        const o = runOpts || {};
+        return agentRunner({
+          provider: live.provider,
+          messages: messages,
+          tools: toolList,
+          maxRounds: o.maxRounds,
+          temperature: o.temperature,
+          timeoutMs: o.timeoutMs || live.config.requestTimeoutMs,
+          signal: o.signal,
+          streamChatEvents: eventsStream,
+        });
+      };
+    },
+    /** 人设组装：三个开关分别控制 history / memory / features，缺省全开 */
+    persona: {
+      compose: function (extra, opts) {
+        const live = resolveLive();
+        const o = opts || {};
+        const sessionId = safeSessionId(o.sessionId || 'main');
+        let history = [];
+        let memoryText = '';
+        if (o.history !== false || o.memory !== false) {
+          const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: live.config.memory });
+          if (o.history !== false) history = memory.recentTurns(MAX_HISTORY);
+          if (o.memory !== false) memoryText = memory.memoryBlock();
+        }
+        const parts = [];
+        if (typeof extra === 'string' && extra.trim() !== '') parts.push(extra.trim());
+        if (o.features !== false && featureHost) {
+          const block = featureHost.promptText();
+          if (block) parts.push(block);
+        }
+        return {
+          messages: buildMessages(live.persona, history, {
+            maxHistory: MAX_HISTORY,
+            memoryText: memoryText,
+            extraText: parts.join('\n\n'),
+          }),
+          reply: live.persona.reply,
+        };
+      },
+    },
+    /** 播报：补全统一形状后广播（入记忆/心情在 P2f-1b） */
+    pushText: function (text, meta) {
+      const m = meta || {};
+      const to = m.to || null;
+      const msg = {
+        id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        ts: new Date().toISOString(),
+        role: 'assistant',
+        self: true,
+        source: String(m.source || 'plugin'),
+        kind: m.kind === 'reply' ? 'reply' : 'broadcast',
+        text: String(text == null ? '' : text),
+        image: null,
+        chat: null,
+        sender: null,
+        msgId: null,
+        flags: null,
+        to: to,
+        target: to ? undefined : 'web',
+      };
+      bus.emit('push', msg);
+      return msg;
+    },
+    /** 插件数据目录：<dataRoot>/data/plugins/<name>，保证存在 */
+    storage: {
+      dir: function (name) {
+        const safe = String(name || '').replace(/[^A-Za-z0-9_-]/g, '_');
+        if (safe === '') throw new Error('storage.dir 需要名字');
+        const dir = path.join(dataRoot, 'data', 'plugins', safe);
+        fs.mkdirSync(dir, { recursive: true });
+        return dir;
+      },
+    },
+    /** 渠道入站：解析会话 → 跑一轮 → 经注册的渠道回原会话 */
+    dispatchInbound: async function (msg) {
+      const m = msg || {};
+      const chat = m.chat || {};
+      const platform = String(chat.platform || m.source || 'unknown');
+      const type = chat.type === 'group' ? 'g' : 'u';
+      const chatId = String(chat.id || '');
+      if (chatId === '') throw new Error('dispatchInbound 需要 chat.id');
+      const sessionId = safeSessionId(platform + '_' + type + '_' + chatId);
+      const result = await runTurn({
+        sessionId: sessionId,
+        message: String(m.text == null ? '' : m.text),
+        image: String(m.image == null ? '' : m.image),
+      });
+      const send = featureHost && typeof featureHost.channelSend === 'function' ? featureHost.channelSend(platform) : null;
+      if (typeof send === 'function') {
+        send({ chatId: chatId, text: result.text, atUserId: m.sender && m.sender.id });
+      }
+      return { ok: true, text: result.text, sessionId: sessionId };
+    },
   };
 
   featureHost = options.features || createFeatureHost({
@@ -303,6 +403,160 @@ function createServer(config, deps) {
 
   const featureSyncTimer = disableBackground ? null : setInterval(syncFeaturesNow, FEATURE_SYNC_MS);
   if (featureSyncTimer && typeof featureSyncTimer.unref === 'function') featureSyncTimer.unref();
+
+  const sessionLocks = new Map();
+
+  /** 同一会话串行执行：网页与渠道同时说话时，记忆不会互相覆盖 */
+  function withSessionLock(sessionId, task) {
+    const key = String(sessionId || '');
+    const previous = sessionLocks.get(key) || Promise.resolve();
+    const run = previous.then(task, task);
+    const guard = run.then(function () {}, function () {});
+    sessionLocks.set(key, guard);
+    guard.then(function () {
+      if (sessionLocks.get(key) === guard) sessionLocks.delete(key);
+    });
+    return run;
+  }
+
+  /**
+   * 渠道无关的一轮对话：网页、QQ、插件都走这里。
+   * onEvent 收 meta / delta / tool 三类事件；返回 { text, ms, ... }，失败直接抛。
+   */
+  async function runTurn(turn) {
+    const input = turn || {};
+    const sessionId = safeSessionId(input.sessionId);
+    const message = String(input.message == null ? '' : input.message);
+    const image = String(input.image == null ? '' : input.image);
+    const onEvent = typeof input.onEvent === 'function' ? input.onEvent : function () {};
+    const signal = input.signal;
+    const startedAt = Date.now();
+    let text = '';
+
+    return withSessionLock(sessionId, async function () {
+      try {
+        const live = resolveLive();
+        const liveConfig = live.config;
+        const persona = live.persona;
+        const liveProvider = live.provider;
+        const liveTimeout = liveConfig.requestTimeoutMs;
+
+        const memory = openMemory({
+          root: dataRoot,
+          sessionId: sessionId,
+          settings: liveConfig.memory,
+          onWarn: function (msg) {
+            logger.warn('[memory] ' + msg);
+          },
+        });
+
+        const history = memory.recentTurns(MAX_HISTORY);
+        const factsCount = memory.factsForPrompt().length;
+        const hasSummary = memory.export().summary !== '';
+
+        let vision = null;
+        if (image) vision = resolveVisionProvider(liveConfig);
+        const responder = vision || liveProvider;
+
+        onEvent({
+          type: 'meta',
+          persona: persona.name,
+          provider: responder.name,
+          model: vision ? vision.visionModel : liveProvider.chatModel,
+          maxBubbles: persona.reply.maxBubbles,
+          sessionId: sessionId,
+          memory: { facts: factsCount, summary: hasSummary },
+        });
+
+        // 先落用户这条，模型出错也不会丢
+        memory.appendTurn('user', message === '' ? '（发了一张图片）' : message);
+
+        const messages = buildMessages(
+          persona,
+          history.concat([{ role: 'user', content: message === '' ? '（看这张图）' : message }]),
+          { maxHistory: MAX_HISTORY, memoryText: memory.memoryBlock(), extraText: featureHost.promptText() }
+        );
+
+        if (vision) {
+          const visionProvider = Object.assign({}, vision, { chatModel: vision.visionModel });
+          const visionMessages = withImage(messages, image, message);
+          const stream = chatStream({
+            provider: visionProvider,
+            messages: visionMessages,
+            temperature: 0.8,
+            timeoutMs: liveTimeout,
+            signal: signal,
+          });
+          for await (const chunk of stream) {
+            text += chunk;
+            onEvent({ type: 'delta', text: chunk });
+          }
+        } else {
+          const tools = createTools({
+            memory: memory,
+            searchApiKey: liveConfig.search.apiKey,
+            searchEndpoint: liveConfig.search.endpoint,
+            searchMaxResults: liveConfig.search.maxResults,
+          }).concat(featureHost && typeof featureHost.tools === 'function' ? featureHost.tools() : []);
+          const stream = agentRunner({
+            provider: liveProvider,
+            messages: messages,
+            tools: tools,
+            maxRounds: liveConfig.agent.maxRounds,
+            timeoutMs: liveTimeout,
+            signal: signal,
+            streamChatEvents: eventsStream,
+          });
+          for await (const event of stream) {
+            if (event.type === 'text') {
+              text += event.text;
+              onEvent({ type: 'delta', text: event.text });
+            } else if (event.type === 'tool') {
+              onEvent({ type: 'tool', name: event.name, ok: event.ok, args: event.args });
+            }
+          }
+        }
+
+        memory.appendTurn('assistant', text);
+        logger.log(
+          '[chat] ' + responder.name + '/' + (vision ? vision.visionModel : liveProvider.chatModel) +
+            ' 会话=' + sessionId + ' → 出 ' + text.length + ' 字 / ' + (Date.now() - startedAt) + 'ms'
+        );
+
+        if (!disableBackground) {
+          scheduleMemoryWork({
+            memory: memory,
+            llm: buildLlmText(liveProvider, liveTimeout),
+            logger: logger,
+            runner: options.backgroundRunner,
+          });
+          // 能力模块的回复后处理（目前是心情判定）同样只进日志，绝不影响这条回复
+          featureHost.afterReply({
+            sessionId: sessionId,
+            personaName: persona.name,
+            userText: message,
+            replyText: text,
+            ms: Date.now() - startedAt,
+          }).catch(function (err) {
+            logger.warn('[features] 回复后处理失败：' + (err && err.message ? err.message : err));
+          });
+        }
+
+        return {
+          text: text,
+          ms: Date.now() - startedAt,
+          sessionId: sessionId,
+          personaName: persona.name,
+          maxBubbles: persona.reply.maxBubbles,
+          provider: responder.name,
+          model: vision ? vision.visionModel : liveProvider.chatModel,
+        };
+      } catch (err) {
+        if (err && typeof err === 'object' && err.partial === undefined) err.partial = text;
+        throw err;
+      }
+    });
+  }
 
   async function handleChat(req, res) {
     if (req.method !== 'POST') {
@@ -331,131 +585,25 @@ function createServer(config, deps) {
       res.write('data: ' + JSON.stringify(payload) + '\n\n');
     };
 
-    const startedAt = Date.now();
-    let text = '';
-    let memory = null;
-    let liveProvider = null;
-    let liveTimeout = config.requestTimeoutMs;
-
     try {
-      const live = resolveLive();
-      const liveConfig = live.config;
-      const persona = live.persona;
-      liveProvider = live.provider;
-      liveTimeout = liveConfig.requestTimeoutMs;
-
-      memory = openMemory({
-        root: dataRoot,
+      const result = await runTurn({
         sessionId: input.sessionId,
-        settings: liveConfig.memory,
-        onWarn: function (msg) {
-          logger.warn('[memory] ' + msg);
-        },
+        message: input.message,
+        image: input.image,
+        signal: controller.signal,
+        onEvent: send,
       });
-
-      const history = memory.recentTurns(MAX_HISTORY);
-      const factsCount = memory.factsForPrompt().length;
-      const hasSummary = memory.export().summary !== '';
-
-      let vision = null;
-      if (input.image) vision = resolveVisionProvider(liveConfig);
-      const responder = vision || liveProvider;
-
-      send({
-        type: 'meta',
-        persona: persona.name,
-        provider: responder.name,
-        model: vision ? vision.visionModel : liveProvider.chatModel,
-        maxBubbles: persona.reply.maxBubbles,
-        sessionId: input.sessionId,
-        memory: { facts: factsCount, summary: hasSummary },
-      });
-
-      // 先落用户这条，模型出错也不会丢
-      memory.appendTurn('user', input.message === '' ? '（发了一张图片）' : input.message);
-
-      const messages = buildMessages(
-        persona,
-        history.concat([{ role: 'user', content: input.message === '' ? '（看这张图）' : input.message }]),
-        { maxHistory: MAX_HISTORY, memoryText: memory.memoryBlock(), extraText: featureHost.promptText() }
-      );
-
-      if (vision) {
-        const visionProvider = Object.assign({}, vision, { chatModel: vision.visionModel });
-        const visionMessages = withImage(messages, input.image, input.message);
-        const stream = chatStream({
-          provider: visionProvider,
-          messages: visionMessages,
-          temperature: 0.8,
-          timeoutMs: liveTimeout,
-          signal: controller.signal,
-        });
-        for await (const chunk of stream) {
-          text += chunk;
-          send({ type: 'delta', text: chunk });
-        }
-      } else {
-        const tools = createTools({
-          memory: memory,
-          searchApiKey: liveConfig.search.apiKey,
-          searchEndpoint: liveConfig.search.endpoint,
-          searchMaxResults: liveConfig.search.maxResults,
-        });
-        const stream = agentRunner({
-          provider: liveProvider,
-          messages: messages,
-          tools: tools,
-          maxRounds: liveConfig.agent.maxRounds,
-          timeoutMs: liveTimeout,
-          signal: controller.signal,
-          streamChatEvents: eventsStream,
-        });
-        for await (const event of stream) {
-          if (event.type === 'text') {
-            text += event.text;
-            send({ type: 'delta', text: event.text });
-          } else if (event.type === 'tool') {
-            send({ type: 'tool', name: event.name, ok: event.ok, args: event.args });
-          }
-        }
-      }
-
-      memory.appendTurn('assistant', text);
-      send({ type: 'done', ok: true, text: text, ms: Date.now() - startedAt });
-      logger.log(
-        '[chat] ' + responder.name + '/' + (vision ? vision.visionModel : liveProvider.chatModel) +
-          ' 会话=' + input.sessionId + ' → 出 ' + text.length + ' 字 / ' + (Date.now() - startedAt) + 'ms'
-      );
-
-      if (!disableBackground) {
-        scheduleMemoryWork({
-          memory: memory,
-          llm: buildLlmText(liveProvider, liveTimeout),
-          logger: logger,
-          runner: options.backgroundRunner,
-        });
-        // 能力模块的回复后处理（目前是心情判定）同样只进日志，绝不影响这条回复
-        featureHost.afterReply({
-          sessionId: input.sessionId,
-          personaName: persona.name,
-          userText: input.message,
-          replyText: text,
-          ms: Date.now() - startedAt,
-        }).catch(function (err) {
-          logger.warn('[features] 回复后处理失败：' + (err && err.message ? err.message : err));
-        });
-      }
+      send({ type: 'done', ok: true, text: result.text, ms: result.ms });
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       const code = err && err.code ? err.code : 'unknown';
-      send({ type: 'error', message: message, code: code, partial: text });
+      send({ type: 'error', message: message, code: code, partial: (err && err.partial) || '' });
       send({ type: 'done', ok: false });
       logger.error('[chat] 失败（' + code + '）：' + message);
     } finally {
       if (!res.writableEnded) res.end();
     }
   }
-
   async function handlePersona(req, res) {
     const file = config.personaPath;
 
@@ -583,7 +731,11 @@ function createServer(config, deps) {
         persona: live.config.personaPath,
         personaName: live.persona ? live.persona.name : '',
         hotReload: hotReload,
-        tools: ['web_search', 'fetch_url', 'remember'],
+        tools: ['web_search', 'fetch_url', 'remember'].concat(
+          featureHost && typeof featureHost.tools === 'function'
+            ? featureHost.tools().map(function (tool) { return tool.name; })
+            : []
+        ),
         features: featureHost.state(),
       });
       return;

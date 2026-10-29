@@ -192,3 +192,25 @@ test('默认注册表里只有已经实现的能力', function () {
   const names = defaultModules().map(function (module) { return module.name; });
   assert.deepStrictEqual(names, ['mood', 'memory', 'bili']);
 });
+
+test('addTool 强制命名空间，停用后工具与渠道一并清掉', function () {
+  const mod = {
+    name: 'demo',
+    init: function (ctx) {
+      ctx.addTool({ name: 'plugin_demo_echo', run: function () {} });
+      ctx.addTool({ name: 'bad_name', run: function () {} });
+      ctx.registerChannel('demo', function () {});
+      return { stop: function () {} };
+    },
+  };
+  const host = createFeatureHost({ logger: QUIET, context: makeContext(), modules: [mod] });
+
+  host.sync({ features: { demo: { enabled: true } } });
+  assert.equal(host.tools().length, 1, '不合命名空间的工具不能注册');
+  assert.equal(host.tools()[0].name, 'plugin_demo_echo');
+  assert.equal(typeof host.channelSend('demo'), 'function');
+
+  host.sync({ features: { demo: { enabled: false } } });
+  assert.equal(host.tools().length, 0, '停用后工具要清掉');
+  assert.strictEqual(host.channelSend('demo'), null, '停用后渠道要清掉');
+});
