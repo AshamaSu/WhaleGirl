@@ -783,7 +783,8 @@ function createServer(config, deps) {
         sendJson(res, 404, { ok: false, error: '没有这个插件：' + target });
         return;
       }
-      const body = await parseJsonBody(await readBody(req, MAX_BODY_BYTES)).catch(function () { return {}; });
+      let body = {};
+      try { body = parseJsonBody(await readBody(req, MAX_BODY_BYTES)); } catch (err) { body = {}; }
       if (!body || typeof body.enabled !== 'boolean') {
         sendJson(res, 400, { ok: false, error: '请求体需要 { enabled: true 或 false }' });
         return;
