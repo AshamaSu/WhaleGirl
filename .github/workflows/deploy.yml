@@ -1,0 +1,44 @@
+name: deploy
+
+# 单人项目：main 分支测试通过即部署，不做 PR 预览与 staging
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # 手动触发兜底
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 测试
+        run: npm test
+
+      - name: 部署到腾讯云
+        if: success()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd /opt/whale-girl
+            git pull --ff-only origin main
+            sudo systemctl restart whale-girl
+            for i in 1 2 3 4 5; do
+              sleep 2
+              if curl -fsS http://127.0.0.1:8787/api/health > /dev/null; then
+                echo "部署完成，health 通过（第 $i 次探测）"
+                exit 0
+              fi
+            done
+            echo 'health 连续 5 次探测失败，回滚到上一版'
+            git reset --hard ORIG_HEAD
+            sudo systemctl restart whale-girl
+            exit 1

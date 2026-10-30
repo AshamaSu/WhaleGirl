@@ -9,6 +9,7 @@ img/
 *~
 
 # 运行时产物
+.server.pid
 node_modules/
 .DS_Store
 .workbuddy/
