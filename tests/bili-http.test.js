@@ -48,6 +48,9 @@ test('三条路由都带契约与摘要，路径与顺序稳定', function () {
     'GET /api/features/bili/state',
     'POST /api/features/bili/run',
     'POST /api/features/bili/check-replies',
+    'GET /api/features/bili/follows',
+    'POST /api/features/bili/follows',
+    'POST /api/features/bili/follows/remove',
     'GET /api/features/bili/params',
     'POST /api/features/bili/params',
   ]);

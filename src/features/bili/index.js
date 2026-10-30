@@ -37,6 +37,7 @@ const PARAM_SPECS = [
   { key: 'interact.maxFavorites', type: 'number', label: '每日收藏上限', min: 0, max: 20, default: 3, desc: '' },
   { key: 'interact.maxReplies', type: 'number', label: '每日评论/回复上限', min: 0, max: 50, default: 5, desc: '' },
   { key: 'interact.maxDynamics', type: 'number', label: '每日发动态上限', min: 0, max: 10, default: 2, desc: '成长记录/碎碎念' },
+  { key: 'interact.maxFollows', type: 'number', label: '每日关注/取关上限', min: 0, max: 20, default: 5, desc: '网页端朋友管理也计入；0 = 禁用' },
 ];
 
 const SPEC_MAP = {};
@@ -165,6 +166,7 @@ function normalizeInteract(raw) {
     maxFavorites: Math.max(0, num(src.maxFavorites, 3)),
     maxReplies: Math.max(0, num(src.maxReplies, 5)),
     maxDynamics: Math.max(0, num(src.maxDynamics, 2)),
+    maxFollows: Math.max(0, num(src.maxFollows, 5)),
   };
 }
 
@@ -403,6 +405,23 @@ function createBiliModule(options) {
         });
       }
 
+      // 扫「登录账号自己」的关注列表找目标 mid（最多 4 页 × 50 条）；没有 → null
+      async function scanFollowings(mid) {
+        // selfMid 来自 cookie 的 dedeUserId，最准；nav 没拉过时退化到配置的 WG_BILI_MID
+        if (typeof client.ensureNav === 'function') {
+          try { await client.ensureNav(); } catch (err) { /* 拉不到就用现有值 */ }
+        }
+        const vmid = Number((typeof client.selfMid === 'function' && client.selfMid()) || client.mid() || 0) || 0;
+        if (!vmid) return null;
+        for (let pn = 1; pn <= 4; pn += 1) {
+          const list = await api.followings({ vmid: vmid, ps: 50, pn: pn });
+          const hit = list.find(function (item) { return Number(item.mid) === Number(mid); });
+          if (hit) return hit;
+          if (list.length < 50) return null;
+        }
+        return null;
+      }
+
       // 功能面（svc）：接口层（http.js）只认这个门面，摸不到内部状态
       const svc = {
         running: function () { return running; },
@@ -433,6 +452,45 @@ function createBiliModule(options) {
         login: function () { return client.hasLogin ? client.hasLogin() : false; },
         mid: function () { return typeof client.mid === 'function' ? client.mid() : ''; },
         replyCheckAt: function () { return store.state().lastReplyCheckAt || ''; },
+        // —— 朋友管理（A1）：网页端提交即执行；特别关注组账号禁止取关 ——
+        followsList: function () { return store.getFollows(); },
+        follow: async function (mid, remark) {
+          const id = Number(mid) || 0;
+          if (id <= 0) return { ok: false, error: 'mid 不合法' };
+          const budget = store.interactBudget(section.interact).follows;
+          if (budget.left <= 0) {
+            return { ok: false, error: '今天的关注额度用完了（' + budget.used + '/' + budget.limit + '），明天再来' };
+          }
+          const existing = await scanFollowings(id);
+          if (existing) {
+            store.addFollow({ mid: id, uname: existing.uname, remark: remark, special: existing.special });
+            return { ok: false, error: '已经关注了「' + (existing.uname || id) + '」' };
+          }
+          await api.relationModify(id, 1);
+          let entry = null;
+          try { entry = await scanFollowings(id); } catch (err) { entry = null; }
+          const record = store.addFollow({ mid: id, uname: entry ? entry.uname : '', remark: remark, special: entry ? entry.special : false });
+          store.recordInteract('follows', { detail: '关注 ' + (record.uname || id) + (record.remark ? '（' + record.remark + '）' : '') });
+          logger.log('[bili] 关注成功：' + id + (record.uname ? '（' + record.uname + '）' : ''));
+          return { ok: true, follow: record };
+        },
+        unfollow: async function (mid) {
+          const id = Number(mid) || 0;
+          if (id <= 0) return { ok: false, error: 'mid 不合法' };
+          const existing = await scanFollowings(id);
+          if (!existing) {
+            const removed = store.removeFollow(id);
+            return { ok: removed ? true : false, error: removed ? 'B站那边本来就没关注了，名单已对账' : '本来就没有关注 ' + id, removed: removed };
+          }
+          if (existing.special) {
+            return { ok: false, error: '「' + (existing.uname || id) + '」是特别关注，要去B站 App 里取消，这里不动' };
+          }
+          await api.relationModify(id, 2);
+          const removed = store.removeFollow(id);
+          store.recordInteract('follows', { detail: '取关 ' + (existing.uname || id) });
+          logger.log('[bili] 取关成功：' + id + (existing.uname ? '（' + existing.uname + '）' : ''));
+          return { ok: true, removed: removed };
+        },
         startBrowse: function (trigger) {
           runOnce(trigger === 'auto' ? 'auto' : 'manual').catch(function (err) {
             logger.warn('[bili] 手动一轮失败：' + (err && err.message ? err.message : err));
@@ -497,6 +555,9 @@ function createBiliModule(options) {
         state: store.state,
         store: store,
         section: section,
+        follow: svc.follow,
+        unfollow: svc.unfollow,
+        followsList: svc.followsList,
       };
     },
   };

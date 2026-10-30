@@ -212,7 +212,8 @@ function createBiliApi(client, options) {
     const vmid = Number(p.vmid) > 0 ? Number(p.vmid) : 0;
     if (!vmid) throw new BiliError('followings 需要 vmid（主人的 mid）', 0);
     const ps = Math.min(50, Math.max(1, Number(p.ps) || 20));
-    const data = await client.get('/x/relation/followings', { vmid: vmid, ps: ps, order: 'attention' });
+    const pn = Math.max(1, Number(p.pn) || 1);
+    const data = await client.get('/x/relation/followings', { vmid: vmid, ps: ps, pn: pn, order: 'attention' });
     const list = data && Array.isArray(data.list) ? data.list : [];
     return list.map(function (item) {
       return {
@@ -220,8 +221,23 @@ function createBiliApi(client, options) {
         uname: String((item.uname || (item.space && item.space.name)) || ''),
         sign: trimText(item.sign, 60),
         official: String((item.official_verify && item.official_verify.desc) || ''),
+        // 特别关注判定：special 位为 1，或挂在系统「特别关注」标签（tag 含 -10）下
+        special: item.special === 1 || (Array.isArray(item.tag) && item.tag.indexOf(-10) !== -1),
+        attribute: Number(item.attribute) || 0,
       };
     });
+  }
+
+  /**
+   * 关注/取关（act: 1=关注 2=取关）。写操作走 client.post（自动带 csrf + 限速队列）。
+   * 调用方负责前置校验（是否已关注、特别关注保护）与记录。
+   */
+  async function relationModify(fid, act) {
+    const id = Number(fid) || 0;
+    if (id <= 0) throw new BiliError('fid 不合法：' + fid, 0);
+    const action = Number(act) === 2 ? 2 : 1;
+    await client.post('/x/relation/modify', { fid: id, act: action });
+    return true;
   }
 
   /**
@@ -433,6 +449,7 @@ function createBiliApi(client, options) {
     subtitle: subtitle,
     comments: comments,
     followings: followings,
+    relationModify: relationModify,
     masterDynamics: masterDynamics,
     masterNickname: masterNickname,
     msgfeedReplies: msgfeedReplies,

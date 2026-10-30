@@ -27,14 +27,16 @@ function emptyState() {
   return { dayKey: '', dayRounds: 0, lastRunAt: '', lastResult: null, interact: emptyInteract(), interactLog: [] };
 }
 
-const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies', 'dynamics'];
+const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies', 'dynamics', 'follows'];
 
 function emptyInteract() {
-  return { dayKey: '', likes: 0, coins: 0, favorites: 0, replies: 0, dynamics: 0 };
+  const out = { dayKey: '' };
+  for (let i = 0; i < INTERACT_TYPES.length; i += 1) out[INTERACT_TYPES[i]] = 0;
+  return out;
 }
 
-/** 互动日志最多留 50 条，够最近几天的提示与排查用 */
-const MAX_INTERACT_LOG = 50;
+/** 互动日志最多留 200 条，够最近几天的提示与排查用 */
+const MAX_INTERACT_LOG = 200;
 
 /**
  * B站子代理的落盘层：状态、判重表、报告、月度归档。
@@ -292,7 +294,7 @@ function createBiliStore(options) {
     const src = limits && typeof limits === 'object' ? limits : {};
     const current = stateNow().interact;
     const out = {};
-    const limitKeys = { likes: 'maxLikes', coins: 'maxCoins', favorites: 'maxFavorites', replies: 'maxReplies', dynamics: 'maxDynamics' };
+    const limitKeys = { likes: 'maxLikes', coins: 'maxCoins', favorites: 'maxFavorites', replies: 'maxReplies', dynamics: 'maxDynamics', follows: 'maxFollows' };
     for (let i = 0; i < INTERACT_TYPES.length; i += 1) {
       const key = INTERACT_TYPES[i];
       const limit = Math.max(0, Math.round(Number(src[limitKeys[key]]) || 0));
@@ -317,7 +319,7 @@ function createBiliStore(options) {
       at: at.toISOString(),
       type: key,
       bvid: String((info && info.bvid) || ''),
-      detail: String((info && info.detail) || '').slice(0, 120),
+      detail: String((info && info.detail) || '').slice(0, 200),
     };
     state.interactLog.push(entry);
     if (state.interactLog.length > MAX_INTERACT_LOG) state.interactLog = state.interactLog.slice(-MAX_INTERACT_LOG);
@@ -359,6 +361,53 @@ function createBiliStore(options) {
     writeJson(stateFile, state);
   }
 
+  // —— 朋友名单（follows.json）：网页端关注/取关动作的本地留存 ——
+  const followsFile = path.join(base, 'follows.json');
+  let follows = readJson(followsFile, { list: [] }, function () { return true; });
+  if (!follows || typeof follows !== 'object' || !Array.isArray(follows.list)) follows = { list: [] };
+
+  function saveFollows() {
+    writeJson(followsFile, follows);
+  }
+
+  function getFollows() {
+    return follows.list.slice();
+  }
+
+  function findFollow(mid) {
+    const id = Number(mid) || 0;
+    return follows.list.find(function (item) { return Number(item.mid) === id; }) || null;
+  }
+
+  function addFollow(entry) {
+    const mid = Number(entry && entry.mid) || 0;
+    if (mid <= 0) return null;
+    const existing = findFollow(mid);
+    const record = {
+      mid: mid,
+      uname: String((existing && existing.uname) || entry.uname || ''),
+      remark: String((existing && existing.remark) || entry.remark || ''),
+      followedAt: (existing && existing.followedAt) || clock().toISOString(),
+      special: entry.special === true || (existing && existing.special === true) || false,
+    };
+    if (existing) {
+      const idx = follows.list.indexOf(existing);
+      follows.list[idx] = record;
+    } else {
+      follows.list.push(record);
+    }
+    saveFollows();
+    return record;
+  }
+
+  function removeFollow(mid) {
+    const existing = findFollow(mid);
+    if (!existing) return null;
+    follows.list.splice(follows.list.indexOf(existing), 1);
+    saveFollows();
+    return existing;
+  }
+
   return {
     base: base,
     outDir: outDir,
@@ -375,6 +424,14 @@ function createBiliStore(options) {
     hasNotified: hasNotified,
     markNotified: markNotified,
     markReplyCheck: markReplyCheck,
+    getFollows: getFollows,
+    findFollow: findFollow,
+    addFollow: addFollow,
+    removeFollow: removeFollow,
+    getFollows: getFollows,
+    findFollow: findFollow,
+    addFollow: addFollow,
+    removeFollow: removeFollow,
     recordRun: recordRun,
     hasSeen: hasSeen,
     markSeen: markSeen,

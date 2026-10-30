@@ -77,10 +77,10 @@ function start(params) {
   return { root: root, ctx: ctx, handle: handle, routes: routes, readConfigText: function () { return fs.readFileSync(path.join(root, 'config.json'), 'utf8'); } };
 }
 
-test('specs 齐全：17 个参数，键含 interact 点路径', function () {
+test('specs 齐全：19 个参数，键含 interact 点路径', function () {
   const env = start();
   const specs = env.handle.specs();
-  assert.equal(specs.length, 18);
+  assert.equal(specs.length, 19);
   const keys = specs.map(function (spec) { return spec.key; });
   assert.ok(keys.indexOf('intervalMinutes') !== -1);
   assert.ok(keys.indexOf('interact.maxCoins') !== -1);

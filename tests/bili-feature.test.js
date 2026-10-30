@@ -119,6 +119,9 @@ test('init 注册两个路由，state 能看运行状态', async function () {
       'GET /api/features/bili/state',
       'POST /api/features/bili/run',
       'POST /api/features/bili/check-replies',
+      'GET /api/features/bili/follows',
+      'POST /api/features/bili/follows',
+      'POST /api/features/bili/follows/remove',
       'GET /api/features/bili/params',
       'POST /api/features/bili/params',
     ]);

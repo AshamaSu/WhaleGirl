@@ -43,6 +43,15 @@
   input:focus, textarea:focus { border-color: #a9cdec; box-shadow: 0 0 0 3px rgba(47, 127, 214, 0.12); }
   textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; min-height: 66px; }
   .desc { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .friends { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; }
+  .friends h2 { font-size: 14px; margin: 0 0 4px; }
+  .friend-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; font-size: 13px; }
+  .friend-row .who { flex: 1; }
+  .friend-row .who .remark { font-size: 11px; color: var(--muted); }
+  .friend-add { display: flex; gap: 8px; margin-top: 8px; }
+  .friend-add input { flex: 1; }
+  .friend-add input.mid { max-width: 180px; }
+  .badge.special { color: #a35b00; border-color: #f0d3b6; background: #fffaf3; }
   .actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
   button {
     border: 0; border-radius: 10px; padding: 8px 16px; font: inherit; font-size: 13px;
@@ -223,7 +232,103 @@ function renderCard(name, info) {
     card.appendChild(el('div', 'status bad', '参数接口不可用：' + e.message));
   });
 
+  if (name === 'bili') renderFriends(card);
+
   return card;
+}
+
+// —— B站朋友管理：网页端提交即执行关注/取关；特别关注组的账号服务端拒绝取消 ——
+function renderFriends(card) {
+  var box = el('div', 'friends');
+  box.appendChild(el('h2', null, '朋友管理'));
+  box.appendChild(el('p', 'tip', '提交即执行关注，移除即取关（计入每日关注额度）。已加入【特别关注】分组的账号这里取消不了，要去B站 App 操作'));
+  var listWrap = el('div', 'friend-list', '读取中…');
+  box.appendChild(listWrap);
+
+  var addRow = el('div', 'friend-add');
+  var midInput = el('input', 'mid');
+  midInput.type = 'number';
+  midInput.placeholder = 'B站 MID（纯数字）';
+  var remarkInput = el('input');
+  remarkInput.type = 'text';
+  remarkInput.placeholder = '备注名（可选）';
+  var addBtn = el('button', null, '关注');
+  var feedback = el('span', 'desc', '');
+  addRow.appendChild(midInput);
+  addRow.appendChild(remarkInput);
+  addRow.appendChild(addBtn);
+  box.appendChild(addRow);
+  box.appendChild(feedback);
+
+  function msg(text) { feedback.textContent = text || ''; }
+
+  function loadList() {
+    fetch('/api/features/bili/follows').then(function (r) { return r.json(); }).then(function (data) {
+      listWrap.textContent = '';
+      var list = (data && data.list) || [];
+      if (list.length === 0) {
+        listWrap.appendChild(el('div', 'desc', '名单还是空的：填上朋友的 MID 点「关注」'));
+        return;
+      }
+      list.forEach(function (item) {
+        var row = el('div', 'friend-row');
+        var who = el('div', 'who');
+        who.appendChild(el('div', null, (item.uname || '（还没拿到昵称）') + ' · ' + item.mid));
+        if (item.remark) who.appendChild(el('div', 'remark', '备注：' + item.remark));
+        row.appendChild(who);
+        if (item.special) row.appendChild(el('span', 'badge special', '特别关注'));
+        var removeBtn = el('button', null, '取关');
+        if (item.special) {
+          removeBtn.title = '特别关注的账号要去B站 App 里取消';
+          removeBtn.disabled = true;
+          removeBtn.style.opacity = '0.45';
+          removeBtn.style.cursor = 'default';
+        } else {
+          removeBtn.onclick = function () {
+            removeBtn.disabled = true;
+            fetch('/api/features/bili/follows/remove', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ mid: item.mid }),
+            }).then(function (r) { return r.json(); }).then(function (body) {
+              if (body.ok) { msg('已取关 ' + item.mid); loadList(); }
+              else { msg(body.error || '取关失败'); removeBtn.disabled = false; }
+            }).catch(function (e) { msg('请求失败：' + e.message); removeBtn.disabled = false; });
+          };
+        }
+        row.appendChild(removeBtn);
+        listWrap.appendChild(row);
+      });
+    }).catch(function (e) {
+      listWrap.textContent = '';
+      listWrap.appendChild(el('div', 'desc', '名单读不到：' + e.message));
+    });
+  }
+
+  addBtn.onclick = function () {
+    var mid = midInput.value.trim();
+    if (mid === '' || Number(mid) <= 0) { msg('先填朋友的 B站 MID'); return; }
+    addBtn.disabled = true;
+    msg('关注中…');
+    fetch('/api/features/bili/follows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mid: Number(mid), remark: remarkInput.value.trim() }),
+    }).then(function (r) { return r.json(); }).then(function (body) {
+      addBtn.disabled = false;
+      if (body.ok) {
+        msg('已关注 ' + mid + (body.follow && body.follow.uname ? '（' + body.follow.uname + '）' : ''));
+        midInput.value = '';
+        remarkInput.value = '';
+        loadList();
+      } else {
+        msg(body.error || '关注失败');
+      }
+    }).catch(function (e) { addBtn.disabled = false; msg('请求失败：' + e.message); });
+  };
+
+  loadList();
+  card.appendChild(box);
 }
 
 fetch('/api/health').then(function (r) { return r.json(); }).then(function (health) {

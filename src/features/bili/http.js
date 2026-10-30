@@ -100,6 +100,55 @@ function createBiliHttp(svc, ctx) {
     },
     {
       method: 'GET',
+      pathname: '/api/features/bili/follows',
+      summary: '朋友名单：本地 follows.json（网页端关注/取关动作的留存）',
+      contract: {
+        request: '无参数',
+        response: {
+          ok: 'boolean，恒为 true',
+          list: 'array [{ mid, uname, remark, followedAt, special }]，special=是否在特别关注组',
+        },
+      },
+      handler: function (req, res) {
+        ctx.sendJson(res, 200, { ok: true, list: svc.followsList() });
+      },
+    },
+    {
+      method: 'POST',
+      pathname: '/api/features/bili/follows',
+      summary: '关注一个用户（网页端提交即执行）',
+      contract: {
+        request: '{ mid: number|string, remark?: string 备注名 }',
+        response: {
+          '200': '{ ok: true, follow: { mid, uname, remark, followedAt, special } }',
+          '400': '{ ok: false, error: "人话原因" }（mid 不合法 / 已关注 / 当日额度用完）',
+        },
+      },
+      handler: async function (req, res) {
+        const body = await ctx.readJson(req, 16 * 1024).catch(function () { return null; });
+        const result = await svc.follow(body && body.mid, body ? body.remark : '');
+        ctx.sendJson(res, result.ok ? 200 : 400, result);
+      },
+    },
+    {
+      method: 'POST',
+      pathname: '/api/features/bili/follows/remove',
+      summary: '取关一个用户；特别关注组的账号拒绝（要去B站 App 操作）',
+      contract: {
+        request: '{ mid: number|string }',
+        response: {
+          '200': '{ ok: true, removed: { mid, uname, remark, followedAt, special } }',
+          '400': '{ ok: false, error: "人话原因" }（未关注 / 特别关注保护 / mid 不合法）',
+        },
+      },
+      handler: async function (req, res) {
+        const body = await ctx.readJson(req, 16 * 1024).catch(function () { return null; });
+        const result = await svc.unfollow(body && body.mid);
+        ctx.sendJson(res, result.ok ? 200 : 400, result);
+      },
+    },
+    {
+      method: 'GET',
       pathname: '/api/features/bili/params',
       summary: '参数面板数据：参数定义（插件提供）+ 当前原始配置段',
       contract: {
