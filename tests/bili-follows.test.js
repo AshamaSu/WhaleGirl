@@ -71,17 +71,19 @@ function boot(overrides) {
     pushText: function () {},
     persona: { compose: function () { return { messages: [], reply: { maxBubbles: 3 } }; } },
     makeAgent: function () { throw new Error('不该用子代理'); },
-    getConfig: function () { return { features: { bili: opts.section || {} } }; },
+    getConfig: function () { return { features: { bili: Object.assign({ dutyFile: path.join(ROOT, 'prompts', 'bili-duty.md') }, opts.section || {}) } }; },
     getEnv: function () { return {}; },
     route: function (method, pathname, handler) { routes.push({ method: method, pathname: pathname, handler: handler }); },
     addPromptBlock: function () {},
     addAfterReply: function () {},
     addTool: function (def) { tools.push(def); },
+    addMemoryFact: function (text, source) { memoryFacts.push({ text: text, source: source }); },
     readJson: async function (req, limit) { return ctx._body || {}; },
     serveStatic: function () {},
   };
   const routes = [];
   const tools = [];
+  const memoryFacts = [];
   const store = createBiliStore({ root: root, now: function () { return FIXED; } });
   const module = createBiliModule({
     now: function () { return FIXED; },
@@ -89,10 +91,10 @@ function boot(overrides) {
     client: { hasLogin: function () { return true; }, mid: function () { return 9973677; }, selfMid: function () { return 9973677; } },
     api: fake.api,
     provider: { name: 'fake' },
-    runAgent: function () { return (async function* () { yield { type: 'final', text: '' }; })(); },
+    runAgent: opts.runAgent || function () { return (async function* () { yield { type: 'final', text: '' }; })(); },
   });
   const handle = module.init(ctx);
-  return { handle: handle, store: store, calls: fake.calls, routes: routes, tools: tools };
+  return { handle: handle, store: store, calls: fake.calls, routes: routes, tools: tools, memoryFacts: memoryFacts };
 }
 
 test('网页端关注：成功写入名单并计额度；重复关注给人话提示', async function () {
@@ -174,5 +176,30 @@ test('init 注册 plugin_bili_browse_recall 只读工具，execute 聚合三类�
 
   const miss = await tool.execute({ topic: 'browse', keyword: '不存在的词' });
   assert.match(miss, /没有看过/);
+});
+
+
+// —— A3：概念总结进宿主记忆 ——
+
+test('浏览轮有入选结果时，概念总结以 source=bili 写入宿主记忆', async function () {
+  const env = boot({
+    pages: { 1: [] },
+    runAgent: function () {
+      return (async function* () {
+        yield { type: 'final', text: '### BV1gExu6GEjZ\n标题：鲸鱼观察日记\nUP：某UP主\n链接：x\n播放：12.3万\n为什么值得：拍得干净。\n' };
+      })();
+    },
+  });
+  const result = await env.handle.runOnce('manual');
+  assert.equal(result.ok, true, JSON.stringify({ error: result.error }));
+  assert.equal(env.memoryFacts.length, 1, '本轮写了一条概念记忆');
+  assert.match(env.memoryFacts[0].text, /鲸鱼观察日记/);
+  assert.equal(env.memoryFacts[0].source, 'bili');
+});
+
+test('浏览轮没有入选结果时，不写概念记忆', async function () {
+  const env = boot({ pages: { 1: [] } });
+  await env.handle.runOnce('manual');
+  assert.equal(env.memoryFacts.length, 0);
 });
 

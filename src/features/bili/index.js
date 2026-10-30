@@ -414,6 +414,16 @@ function createBiliModule(options) {
           lastResult = result;
           if (result.ok && Array.isArray(result.items) && result.items.length > 0) {
             store.appendHistory(result.items, { at: result.at, trigger: result.trigger });
+            // A3：概念总结进宿主记忆事实层（source=bili，随标准 factDecay 衰减遗忘）。
+            // 每轮最多 1 条，轮数受 dailyQuota 限制，天然不会刷爆事实容量。
+            if (typeof ctx.addMemoryFact === 'function') {
+              try {
+                const titles = result.items.slice(0, 3).map(function (item) { return '《' + (item.title || item.bvid) + '》'; }).join('');
+                ctx.addMemoryFact('今天在B站看了' + titles + (result.items.length > 3 ? ' 等 ' + result.items.length + ' 条' : ''), 'bili');
+              } catch (err) {
+                logger.warn('[bili] 概念总结落记忆失败：' + (err && err.message ? err.message : err));
+              }
+            }
           }
           if (result.ok) {
             result.bubbles = await announce(result);

@@ -361,6 +361,17 @@ function createServer(config, deps) {
       return parseJsonBody(await readBody(req, limit || MAX_BODY_BYTES));
     },
     getConfig: function () { return resolveLive().config; },
+    /** 插件只调宿主接口：往主会话记忆事实层写一条（带 source），随标准衰减遗忘 */
+    addMemoryFact: function (text, source) {
+      const fact = String(text == null ? '' : text).trim();
+      if (fact === '') return null;
+      const memory = openMemory({
+        root: dataRoot,
+        sessionId: 'main',
+        settings: memorySettings(resolveLive().config),
+      });
+      return memory.addFact(fact, source);
+    },
     // 能力模块里凡是要读 .env（比如 B站 cookie）都走这里，别直接摸 process.env
     getEnv: function () { return resolveLive().env || {}; },
     makeLlm: function () {
