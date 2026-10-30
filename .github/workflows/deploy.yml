@@ -10,9 +10,9 @@ jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -26,11 +26,11 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
           script: |
+            set -e
             cd /opt/whale-girl
             git pull --ff-only origin main
-            sudo systemctl restart whale-girl
+            sudo -n systemctl restart whale-girl
             for i in 1 2 3 4 5; do
               sleep 2
               if curl -fsS http://127.0.0.1:8787/api/health > /dev/null; then
@@ -40,5 +40,5 @@ jobs:
             done
             echo 'health 连续 5 次探测失败，回滚到上一版'
             git reset --hard ORIG_HEAD
-            sudo systemctl restart whale-girl
+            sudo -n systemctl restart whale-girl
             exit 1
