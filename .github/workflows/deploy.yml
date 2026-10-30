@@ -24,10 +24,9 @@ jobs:
       - name: 打包
         if: success()
         run: |
-          if ! tar czf release.tgz --exclude='.git' --exclude='release.tgz' . 2>tar.err; then
-            echo "::error::tar 打包失败：$(tail -3 tar.err | tr '\n' ' ')"
-            exit 1
-          fi
+          # GNU tar 对「在读目录里写归档」会报 file changed as we read it，先写到目录外再拷回
+          tar czf /tmp/release.tgz -C "$GITHUB_WORKSPACE" --exclude='.git' .
+          cp /tmp/release.tgz release.tgz
           ls -la release.tgz
 
       - name: 上传到服务器
