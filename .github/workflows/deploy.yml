@@ -28,23 +28,22 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
-            # 首次部署：服务器上没有代码就先 clone（仓库公开，HTTPS 即可）
+            fail() { echo "::error::$1"; exit 1; }
             if [ ! -d /opt/whale-girl/.git ]; then
               echo '首次部署：clone 仓库到 /opt/whale-girl'
-              git clone https://github.com/AshamaSu/WhaleGirl.git /opt/whale-girl
+              git clone https://github.com/AshamaSu/WhaleGirl.git /opt/whale-girl 2>&1 || fail 'clone 失败：检查服务器能否访问 github.com（curl -sI https://github.com 试试）'
             fi
-            cd /opt/whale-girl
-            git fetch origin main
-            git reset --hard origin/main
-            sudo -n systemctl restart whale-girl
+            cd /opt/whale-girl || fail '/opt/whale-girl 不存在且 clone 失败'
+            git fetch origin main 2>&1 || fail 'git fetch 失败：服务器网络或仓库访问问题'
+            git reset --hard origin/main 2>&1 || fail 'git reset 失败：仓库状态异常'
+            sudo -n systemctl restart whale-girl 2>&1 || fail 'systemctl restart 失败：whale-girl.service 未安装（先做手册第 4 节）或 sudo 未免密（第 7 节 visudo）'
+            ok=0
             for i in 1 2 3 4 5; do
               sleep 2
-              if curl -fsS http://127.0.0.1:8787/api/health > /dev/null; then
+              if curl -fsS http://127.0.0.1:8787/api/health > /dev/null 2>&1; then
                 echo "部署完成，health 通过（第 $i 次探测）"
-                exit 0
+                ok=1
+                break
               fi
             done
-            echo 'health 连续 5 次探测失败，回滚到上一版'
-            git reset --hard ORIG_HEAD
-            sudo -n systemctl restart whale-girl
-            exit 1
+            [ "$ok" = "1" ] || { echo '::error::health 探测 5 次全失败：服务起了但 8787 没响应——journalctl -u whale-girl -n 30 看启动日志（多为 /etc/whale-girl.env 缺失或端口被占）'; git reset --hard ORIG_HEAD 2>/dev/null; sudo -n systemctl restart whale-girl 2>&1 || true; exit 1; }
