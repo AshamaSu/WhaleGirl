@@ -49,12 +49,14 @@ jobs:
           script: |
             set -e
             fail() { echo "::error::$1"; exit 1; }
-            mkdir -p /opt/whale-girl
-            # 留一份上一版包用于回滚
+            SUDO=''
+            [ "$(id -u)" = '0' ] || SUDO='sudo -n'
+            $SUDO mkdir -p /opt/whale-girl 2>&1 || fail '创建 /opt/whale-girl 失败：非 root 且 sudo 不可用（配 visudo 免密，见手册第 7 节）'
+            $SUDO chown -R "$(id -u):$(id -g)" /opt/whale-girl 2>&1 || true
             [ -f /opt/whale-girl/release.tgz ] && cp /opt/whale-girl/release.tgz /tmp/release-prev.tgz || true
-            tar xzf /tmp/release.tgz -C /opt/whale-girl
+            tar xzf /tmp/release.tgz -C /opt/whale-girl 2>&1 || fail '解包失败：/tmp/release.tgz 损坏或磁盘满'
             cp /tmp/release.tgz /opt/whale-girl/release.tgz
-            sudo -n systemctl restart whale-girl 2>&1 || fail 'systemctl restart 失败：whale-girl.service 未安装（先做手册第 4 节）或 sudo 未免密（第 7 节 visudo）'
+            $SUDO systemctl restart whale-girl 2>&1 || fail 'systemctl restart 失败：whale-girl.service 未安装（先做手册第 4 节）或 sudo 未免密（第 7 节 visudo）'
             ok=0
             for i in 1 2 3 4 5; do
               sleep 2
@@ -67,6 +69,6 @@ jobs:
             [ "$ok" = "1" ] || {
               echo '::error::health 探测 5 次全失败：journalctl -u whale-girl -n 30 看启动日志（多为 /etc/whale-girl.env 缺失、Node 未装或端口被占）'
               if [ -f /tmp/release-prev.tgz ]; then tar xzf /tmp/release-prev.tgz -C /opt/whale-girl; fi
-              sudo -n systemctl restart whale-girl 2>&1 || true
+              $SUDO systemctl restart whale-girl 2>&1 || true
               exit 1
             }
