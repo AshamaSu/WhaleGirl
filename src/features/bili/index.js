@@ -170,6 +170,69 @@ function normalizeInteract(raw) {
   };
 }
 
+/**
+ * A4：对话查询她的B站动态。聚合本地留存（浏览历史/关注名单/互动日志），
+ * 只读、纯本地文件，不发起网络请求；输出压到 ~800 字内供主对话直接引用。
+ */
+const RECALL_MAX_CHARS = 800;
+
+function recallReport(store, args) {
+  const topic = String((args && args.topic) || 'summary');
+  const keyword = String((args && args.keyword) || '').trim();
+  const days = Number(args && args.days) > 0 ? Math.min(90, Number(args.days)) : 7;
+  const match = function (text) { return keyword === '' || String(text == null ? '' : text).indexOf(keyword) !== -1; };
+  const sections = [];
+
+  if (topic === 'browse' || topic === 'summary') {
+    let items = [];
+    try { items = store.recentHistory(50, days) || []; } catch (err) { items = []; }
+    items = items.filter(function (item) { return match(item.title) || match(item.up); });
+    if (items.length === 0) {
+      sections.push('浏览：最近 ' + days + ' 天没有看过' + (keyword ? '含「' + keyword + '」的' : '') + '视频');
+    } else {
+      const lines = items.slice(0, 10).map(function (item) {
+        const day = String(item.date || '').slice(5);
+        return '- ' + (day ? day + ' ' : '') + '《' + (item.title || item.bvid) + '》' + (item.up ? '（UP：' + item.up + '）' : '');
+      });
+      sections.push('浏览（最近 ' + days + ' 天共 ' + items.length + ' 条' + (items.length > 10 ? '，取最近 10 条' : '') + '）：\n' + lines.join('\n'));
+    }
+  }
+
+  if (topic === 'follows' || topic === 'summary') {
+    let list = [];
+    try { list = store.getFollows() || []; } catch (err) { list = []; }
+    list = list.filter(function (item) { return match(item.uname) || match(item.remark); });
+    if (list.length === 0) {
+      sections.push('关注：名单是空的');
+    } else {
+      const lines = list.map(function (item) {
+        return '- ' + (item.uname || item.mid) + (item.remark ? '（备注：' + item.remark + '）' : '') + (item.special ? '［特别关注］' : '');
+      });
+      sections.push('关注的朋友：\n' + lines.join('\n'));
+    }
+  }
+
+  if (topic === 'replies' || topic === 'summary') {
+    let log = [];
+    try { log = store.interactLog(50) || []; } catch (err) { log = []; }
+    const typeNames = { replies: '评论', dynamics: '动态', follows: '关注' };
+    const mine = log.filter(function (entry) {
+      return (entry.type === 'replies' || entry.type === 'dynamics' || entry.type === 'follows') && match(entry.detail);
+    });
+    if (mine.length === 0) {
+      sections.push('互动：最近没发过评论/回复/动态');
+    } else {
+      const lines = mine.slice(0, 10).map(function (entry) {
+        return '- ' + String(entry.at || '').slice(5, 10) + ' [' + (typeNames[entry.type] || entry.type) + '] ' + (entry.detail || '');
+      });
+      sections.push('互动记录（取最近 ' + lines.length + ' 条）：\n' + lines.join('\n'));
+    }
+  }
+
+  if (sections.length === 0) sections.push('没查到相关记录');
+  return sections.join('\n\n').slice(0, RECALL_MAX_CHARS);
+}
+
 const HISTORY_PROMPT_LIMIT = 5;
 const HISTORY_PROMPT_DAYS = 7;
 
@@ -533,6 +596,33 @@ function createBiliModule(options) {
         ctx.addPromptBlock(function () { return historyPrompt(store); });
       }
 
+      // A4：主人明确问起她在B站的动态时，主对话调这个只读工具查本地记录（体现本性：不问不查）
+      if (typeof ctx.addTool === 'function') {
+        ctx.addTool({
+          name: 'plugin_bili_browse_recall',
+          description:
+            '查询小鲸自己在B站的活动记录：浏览过什么视频、关注了谁、发过什么评论/动态。' +
+            '仅当主人明确问起「你在B站看了什么/关注了谁/回复了什么」这类问题时才调用；闲聊或聊别的事情不要调用。' +
+            '回答以查到的记录为准，查不到就直说，不要编造。',
+          parameters: {
+            type: 'object',
+            properties: {
+              topic: {
+                type: 'string',
+                enum: ['browse', 'follows', 'replies', 'summary'],
+                description: 'browse=浏览记录；follows=关注名单；replies=自己发过的评论/动态；summary=概要（全都要）',
+              },
+              keyword: { type: 'string', description: '可选：按标题/UP/备注过滤关键词' },
+              days: { type: 'number', description: '可选：浏览记录只看最近几天（默认 7）' },
+            },
+            required: ['topic'],
+          },
+          execute: async function (args) {
+            return recallReport(store, args || {});
+          },
+        });
+      }
+
       timer = setInterval(tick, TICK_MS);
       if (timer && typeof timer.unref === 'function') timer.unref();
       replyTimer = setInterval(tickReplies, TICK_MS);
@@ -565,6 +655,7 @@ function createBiliModule(options) {
 
 module.exports = {
   createBiliModule: createBiliModule,
+  recallReport: recallReport,
   normalizeSection: normalizeSection,
   normalizeInteract: normalizeInteract,
   historyPrompt: historyPrompt,

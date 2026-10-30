@@ -76,10 +76,12 @@ function boot(overrides) {
     route: function (method, pathname, handler) { routes.push({ method: method, pathname: pathname, handler: handler }); },
     addPromptBlock: function () {},
     addAfterReply: function () {},
+    addTool: function (def) { tools.push(def); },
     readJson: async function (req, limit) { return ctx._body || {}; },
     serveStatic: function () {},
   };
   const routes = [];
+  const tools = [];
   const store = createBiliStore({ root: root, now: function () { return FIXED; } });
   const module = createBiliModule({
     now: function () { return FIXED; },
@@ -90,7 +92,7 @@ function boot(overrides) {
     runAgent: function () { return (async function* () { yield { type: 'final', text: '' }; })(); },
   });
   const handle = module.init(ctx);
-  return { handle: handle, store: store, calls: fake.calls, routes: routes };
+  return { handle: handle, store: store, calls: fake.calls, routes: routes, tools: tools };
 }
 
 test('网页端关注：成功写入名单并计额度；重复关注给人话提示', async function () {
@@ -138,5 +140,39 @@ test('取关保护：特别关注组账号拒绝；普通账号放行；没关�
   const ghost = await env.handle.unfollow(999);
   assert.equal(ghost.ok, false);
   assert.match(ghost.error, /没有关注/);
+});
+
+
+// —— A4：browse_recall 查询工具 ——
+
+test('init 注册 plugin_bili_browse_recall 只读工具，execute 聚合三类本地记录', async function () {
+  const env = boot({ pages: { 1: [] } });
+  const tool = env.tools.find(function (item) { return item.name === 'plugin_bili_browse_recall'; });
+  assert.ok(tool, '工具已注册');
+  assert.match(tool.description, /仅当主人明确问起/, 'description 写明触发纪律');
+
+  const store = env.store;
+  store.appendHistory([{ bvid: 'BV1gExu6GEjZ', title: '深海养鱼指南', up: '蓝色小肥鱼', link: 'x' }], { at: FIXED });
+  store.addFollow({ mid: 222, uname: '特别的老王', remark: '球友', special: true });
+  store.recordInteract('replies', { detail: '评论：这个卡点也太丝滑了吧' });
+
+  const browse = await tool.execute({ topic: 'browse' });
+  assert.match(browse, /深海养鱼指南/);
+  assert.match(browse, /蓝色小肥鱼/);
+
+  const follows = await tool.execute({ topic: 'follows' });
+  assert.match(follows, /特别的老王/);
+  assert.match(follows, /球友/);
+  assert.match(follows, /特别关注/);
+
+  const replies = await tool.execute({ topic: 'replies' });
+  assert.match(replies, /丝滑/);
+
+  const summary = await tool.execute({ topic: 'summary', keyword: '深海' });
+  assert.match(summary, /深海养鱼指南/);
+  assert.match(summary, /名单是空的/, 'keyword 过滤后关注名单为空');
+
+  const miss = await tool.execute({ topic: 'browse', keyword: '不存在的词' });
+  assert.match(miss, /没有看过/);
 });
 
