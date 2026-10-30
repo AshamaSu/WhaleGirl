@@ -214,6 +214,7 @@
     <a href="/memory" id="memory-link" class="hidden">记忆</a>
     <a href="/persona">调参</a>
     <a href="/settings">插件</a>
+    <a href="/login" id="auth-link" class="hidden">登录</a>
   </header>
 
   <main id="chat"></main>
@@ -657,6 +658,23 @@
     .then(function (data) {
       setPersona(data.personaName);
       hintEl.textContent = data.provider + ' · ' + data.model;
+
+      // 登录态：admin 显示「退出」，guest 显示「登录」（服务端没设 token 时 role 也是 admin）
+      var authLink = document.getElementById('auth-link');
+      if (data.role === 'admin') {
+        authLink.textContent = '退出';
+        authLink.href = '#';
+        authLink.classList.remove('hidden');
+        authLink.onclick = function (e) {
+          e.preventDefault();
+          fetch('/api/logout', { method: 'POST' }).then(function () { location.href = '/login'; });
+        };
+      } else {
+        authLink.textContent = '登录';
+        authLink.href = '/login';
+        authLink.onclick = null;
+        authLink.classList.remove('hidden');
+      }
 
       var features = data.features || {};
       if (features.memory && features.memory.enabled) memoryLink.classList.remove('hidden');

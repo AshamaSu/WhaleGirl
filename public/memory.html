@@ -75,6 +75,7 @@
   .bar i { display: block; height: 100%; background: linear-gradient(90deg, #7fc0f0, var(--sea)); }
   .fact.pinned .bar i { background: linear-gradient(90deg, #f2c193, #e08f4e); }
   .strength { font-size: 11px; color: var(--muted); text-align: right; }
+  .curve { display: block; margin: 3px 0 0 auto; }
   .actions { display: flex; gap: 6px; justify-content: flex-end; }
   .actions button { padding: 5px 9px; font-size: 12px; }
   .empty { font-size: 13px; color: var(--muted); padding: 12px 0; }
@@ -187,6 +188,56 @@
     });
   }
 
+  /** 理论遗忘曲线：按衰减系数从当前强度往后推演，阈值虚线 + 预估剩余轮数（纯前端计算，不改存储） */
+  function forgetCurve(fact, decay, minStrength) {
+    var W = 84, H = 26, PAD = 2;
+    var s = Math.max(0, Math.min(1, fact.strength || 0));
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('class', 'curve');
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    var horizon = Math.max(6, Math.min(30, Math.ceil(Math.log(minStrength / Math.max(s, 1e-6)) / Math.log(decay)) + 2));
+    function yOf(v) { return PAD + (H - 2 * PAD) * (1 - Math.max(0, Math.min(1, v))); }
+
+    var d = '';
+    for (var k = 0; k <= horizon; k++) {
+      var x = PAD + (W - 2 * PAD) * k / horizon;
+      d += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(s * Math.pow(decay, k)).toFixed(1) + ' ';
+    }
+    var path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', '#7fc0f0');
+    path.setAttribute('stroke-width', '1.5');
+    svg.appendChild(path);
+
+    var threshold = document.createElementNS(svgNS, 'line');
+    threshold.setAttribute('x1', PAD);
+    threshold.setAttribute('x2', W - PAD);
+    threshold.setAttribute('y1', yOf(minStrength));
+    threshold.setAttribute('y2', yOf(minStrength));
+    threshold.setAttribute('stroke', '#e0a3a3');
+    threshold.setAttribute('stroke-dasharray', '3 2');
+    threshold.setAttribute('stroke-width', '1');
+    svg.appendChild(threshold);
+
+    var dot = document.createElementNS(svgNS, 'circle');
+    dot.setAttribute('cx', PAD);
+    dot.setAttribute('cy', yOf(s));
+    dot.setAttribute('r', '2');
+    dot.setAttribute('fill', '#2f7fd6');
+    svg.appendChild(dot);
+
+    var left = s > minStrength ? Math.ceil(Math.log(minStrength / s) / Math.log(decay)) : 0;
+    var wrap = el('div');
+    wrap.appendChild(svg);
+    wrap.appendChild(el('div', 'strength', left > 0 ? '≈' + left + ' 轮后到阈值' : '已跌破阈值'));
+    return wrap;
+  }
+
   function renderFacts(data) {
     factsEl.textContent = '';
     var facts = data.facts || [];
@@ -213,6 +264,7 @@
       bar.appendChild(fill);
       strength.appendChild(bar);
       strength.appendChild(el('div', 'strength', fact.pinned ? '永久记住' : '强度 ' + Math.round(fact.strength * 100) + '%'));
+      if (!fact.pinned) strength.appendChild(forgetCurve(fact, data.factDecay || 0.97, data.minStrength || 0.15));
       row.appendChild(strength);
 
       var actions = el('div', 'actions');

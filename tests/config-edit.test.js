@@ -95,3 +95,27 @@ test('写回会产生非法 JSON 时拒绝落盘', function () {
   const text = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
   assert.doesNotThrow(function () { JSON.parse(stripComments(text)); });
 });
+
+// —— 回归：紧凑单行子块与段缺失分支 ——
+
+test('紧凑单行子块也能更新（整体重写回退）', function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-ce-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ features: { bili: { enabled: true, params: { factDecay: 0.95 } } } }));
+  const result = patchFeatureSection(root, 'bili', { params: { factDecay: 0.97, maxFacts: 50 } });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const saved = JSON.parse(stripComments(fs.readFileSync(path.join(root, 'config.json'), 'utf8')));
+  assert.equal(saved.features.bili.params.factDecay, 0.97);
+  assert.equal(saved.features.bili.params.maxFacts, 50);
+  assert.equal(saved.features.bili.enabled, true, '同级其他 key 不动');
+});
+
+test('段缺失 + 嵌套补丁：新段落在 features 内而不是顶层（单行 config 回归）', function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-ce-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ features: {} }));
+  const result = patchFeatureSection(root, 'memory', { params: { factDecay: 0.95 } });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const saved = JSON.parse(stripComments(fs.readFileSync(path.join(root, 'config.json'), 'utf8')));
+  assert.equal(saved.features.memory.params.factDecay, 0.95, '新段在 features.memory 下');
+  assert.equal(saved.memory, undefined, '不能写到顶层');
+});
+

@@ -3,6 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const {
   loadConfig,
@@ -15,7 +16,7 @@ const configEdit = require('./src/config-edit');
 const { streamChat } = require('./src/llm');
 const { runAgent } = require('./src/agent');
 const { createTools } = require('./src/tools');
-const { openMemory, extractFacts, summarizeTurns, safeSessionId } = require('./src/memory');
+const { openMemory, extractFacts, summarizeTurns, safeSessionId, memorySettings } = require('./src/memory');
 const { loadEnvFile, withProcessEnv } = require('./src/env');
 const { createBus } = require('./src/events');
 const { createFeatureHost } = require('./src/features');
@@ -26,6 +27,11 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 4000;
 const MAX_IMAGE_CHARS = 3 * 1024 * 1024;
 const MAX_HISTORY = 20;
+
+// —— 管理员会话（零依赖）：令牌只放 .env（WG_ADMIN_TOKEN），登录后发 HMAC 签名 Cookie ——
+const SESSION_COOKIE = 'wg_session';
+const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
+const SESSION_MAX_AGE_S = Math.floor(SESSION_TTL_MS / 1000);
 
 const IMAGE_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 
@@ -262,6 +268,84 @@ function createServer(config, deps) {
 
   const bus = options.bus || createBus({ logger: logger });
 
+  // —— 鉴权：令牌取自 .env 的 WG_ADMIN_TOKEN；不设置 = 不开鉴权（本机模式）——
+  function adminToken() {
+    let env;
+    try {
+      env = resolveLive().env || {};
+    } catch (err) {
+      // 配置加载失败时不让鉴权挡路：走无 token 的本机模式，错误由各接口自己报
+      return '';
+    }
+    return String(env.WG_ADMIN_TOKEN || '').trim();
+  }
+  function authEnabled() { return adminToken() !== ''; }
+  function signSession(payload) {
+    return crypto.createHmac('sha256', adminToken()).update(payload).digest('hex');
+  }
+  function safeEqualText(a, b) {
+    const ab = Buffer.from(String(a));
+    const bb = Buffer.from(String(b == null ? '' : b));
+    if (ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+  }
+  function parseCookies(req) {
+    const header = req.headers && req.headers.cookie;
+    const out = {};
+    if (!header) return out;
+    String(header).split(';').forEach(function (pair) {
+      const idx = pair.indexOf('=');
+      if (idx < 0) return;
+      out[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+    });
+    return out;
+  }
+  function isAdmin(req) {
+    if (!authEnabled()) return true;
+    const raw = parseCookies(req)[SESSION_COOKIE];
+    if (!raw) return false;
+    const parts = raw.split('.');
+    if (parts.length !== 3) return false;
+    const exp = Number(parts[0]);
+    if (!Number.isFinite(exp) || exp <= Date.now()) return false;
+    const payload = parts[0] + '.' + parts[1];
+    return safeEqualText(signSession(payload), parts[2]);
+  }
+  async function handleLogin(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
+      return;
+    }
+    const secret = adminToken();
+    if (secret === '') {
+      sendJson(res, 400, { ok: false, error: '未设置 WG_ADMIN_TOKEN，登录不可用（见部署手册）' });
+      return;
+    }
+    let body = {};
+    try { body = parseJsonBody(await readBody(req, 64 * 1024)); } catch (err) { body = {}; }
+    const token = body && typeof body.token === 'string' ? body.token : '';
+    if (!safeEqualText(secret, token)) {
+      await new Promise(function (done) { setTimeout(done, 500); }); // 简单防爆破：错了拖半秒
+      sendJson(res, 401, { ok: false, error: '令牌不对' });
+      return;
+    }
+    const exp = Date.now() + SESSION_TTL_MS;
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const sig = signSession(exp + '.' + nonce);
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'set-cookie': SESSION_COOKIE + '=' + exp + '.' + nonce + '.' + sig + '; HttpOnly; SameSite=Lax; Path=/; Max-Age=' + SESSION_MAX_AGE_S,
+    });
+    res.end(JSON.stringify({ ok: true, role: 'admin' }));
+  }
+  function handleLogout(req, res) {
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'set-cookie': SESSION_COOKIE + '=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+    });
+    res.end(JSON.stringify({ ok: true }));
+  }
+
   const featureContext = {
     root: root,
     dataRoot: dataRoot,
@@ -310,7 +394,7 @@ function createServer(config, deps) {
         let history = [];
         let memoryText = '';
         if (o.history !== false || o.memory !== false) {
-          const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: live.config.memory });
+          const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: memorySettings(live.config) });
           if (o.history !== false) history = memory.recentTurns(MAX_HISTORY);
           if (o.memory !== false) memoryText = memory.memoryBlock();
         }
@@ -355,7 +439,7 @@ function createServer(config, deps) {
       if (msg.kind === 'broadcast') {
         const roundId = m.roundId || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
         try {
-          const memory = openMemory({ root: dataRoot, sessionId: 'main', settings: resolveLive().config.memory });
+          const memory = openMemory({ root: dataRoot, sessionId: 'main', settings: memorySettings(resolveLive().config) });
           memory.appendSelfTurn(msg.text);
         } catch (err) {
           logger.warn('[features] 播报落记忆失败：' + (err && err.message ? err.message : err));
@@ -456,7 +540,7 @@ function createServer(config, deps) {
         const memory = openMemory({
           root: dataRoot,
           sessionId: sessionId,
-          settings: liveConfig.memory,
+          settings: memorySettings(liveConfig),
           onWarn: function (msg) {
             logger.warn('[memory] ' + msg);
           },
@@ -651,13 +735,13 @@ function createServer(config, deps) {
     const sessionId = safeSessionId(url.searchParams.get('sessionId'));
 
     if (req.method === 'GET') {
-      const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: config.memory });
+      const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: memorySettings(resolveLive().config) });
       sendJson(res, 200, { ok: true, memory: memory.export() });
       return;
     }
 
     if (req.method === 'DELETE') {
-      const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: config.memory });
+      const memory = openMemory({ root: dataRoot, sessionId: sessionId, settings: memorySettings(resolveLive().config) });
       memory.clear();
       sendJson(res, 200, { ok: true, sessionId: sessionId, cleared: true });
       return;
@@ -729,6 +813,28 @@ function createServer(config, deps) {
       throw new HttpError(400, '请求路径不合法');
     }
 
+    // 登录/登出永远放行（gate 之前处理）
+    if (pathname === '/api/login') {
+      await handleLogin(req, res);
+      return;
+    }
+    if (pathname === '/api/logout') {
+      handleLogout(req, res);
+      return;
+    }
+
+    const admin = isAdmin(req);
+    if (!admin) {
+      // 访客：静态页与 GET 只读放行，聊天放行；其余写操作一律 401
+      const method = String(req.method || 'GET').toUpperCase();
+      const guestOk = (method === 'GET' || method === 'HEAD') ||
+        (method === 'POST' && pathname === '/api/chat');
+      if (!guestOk) {
+        sendJson(res, 401, { ok: false, error: '需要管理员登录（/login）' });
+        return;
+      }
+    }
+
     if (pathname === '/api/health') {
       let live;
       try {
@@ -738,6 +844,7 @@ function createServer(config, deps) {
       }
       sendJson(res, 200, {
         ok: true,
+        role: admin ? 'admin' : 'guest',
         provider: live.provider.name,
         model: live.provider.chatModel,
         persona: live.config.personaPath,
@@ -821,6 +928,11 @@ function createServer(config, deps) {
       return;
     }
 
+    if (pathname === '/login') {
+      serveStatic(req, res, '/login.html', publicDir);
+      return;
+    }
+
     if (pathname.indexOf('/api/') === 0) {
       sendJson(res, 404, { ok: false, error: '没有这个接口：' + pathname });
       return;
@@ -868,6 +980,10 @@ function main() {
   }
 
   for (let i = 0; i < config.warnings.length; i += 1) console.warn('提示：' + config.warnings[i]);
+
+  if (!String(fileEnv.WG_ADMIN_TOKEN || process.env.WG_ADMIN_TOKEN || '').trim()) {
+    console.warn('提示：未设置 WG_ADMIN_TOKEN，管理接口无鉴权——公网部署前必须设置（见 docs/部署手册-腾讯云.md）');
+  }
 
   const server = createServer(config, { root: __dirname });
 

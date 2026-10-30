@@ -90,6 +90,12 @@ async function start(config, deps) {
     logger: QUIET,
     disableBackground: true,
   }, deps || {});
+  // 默认空 env：测试不读真实 .env（否则本机设了 WG_ADMIN_TOKEN 会把写接口全 gate 掉）
+  if (!options.loadEnvFile) {
+    options.loadEnvFile = function () {
+      return {};
+    };
+  }
   if (!options.loadConfig) {
     options.loadConfig = function () {
       return config;
@@ -589,3 +595,102 @@ test('dispatchInbound：入站落会话并经注册渠道回话', async function
     await srv.close();
   }
 });
+// —— 鉴权与角色（WG_ADMIN_TOKEN）——
+
+test('设了 WG_ADMIN_TOKEN：访客写请求 401、health 标 guest，登录后 admin，伪造 Cookie 401', async function () {
+  const TOKEN = 'test-admin-token-1234';
+  const srv = await start(baseConfig({}), {
+    loadEnvFile: function () { return { WG_ADMIN_TOKEN: TOKEN }; },
+  });
+  try {
+    const guestWrite = await fetch(srv.base + '/api/features/bili/enabled', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.strictEqual(guestWrite.status, 401, '访客写请求被 gate 拦下');
+
+    const guestHealth = await (await fetch(srv.base + '/api/health')).json();
+    assert.strictEqual(guestHealth.role, 'guest');
+
+    const bad = await fetch(srv.base + '/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'nope' }),
+    });
+    assert.strictEqual(bad.status, 401);
+    assert.ok(!bad.headers.get('set-cookie'), '登录失败不下发 Cookie');
+
+    const ok = await fetch(srv.base + '/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN }),
+    });
+    assert.strictEqual(ok.status, 200);
+    const cookie = ok.headers.get('set-cookie') || '';
+    assert.ok(cookie.indexOf('wg_session=') === 0, '下发 wg_session');
+    assert.ok(cookie.indexOf('HttpOnly') !== -1, 'HttpOnly');
+    assert.ok(cookie.indexOf('SameSite=Lax') !== -1, 'SameSite=Lax');
+    const sess = cookie.split(';')[0].split('=').slice(1).join('=');
+
+    const adminHealth = await (await fetch(srv.base + '/api/health', {
+      headers: { cookie: 'wg_session=' + sess },
+    })).json();
+    assert.strictEqual(adminHealth.role, 'admin');
+
+    const forged = await fetch(srv.base + '/api/features/bili/enabled', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: 'wg_session=9999999999999.aa.deadbeef' },
+      body: '{}',
+    });
+    assert.strictEqual(forged.status, 401, '伪造签名过不了校验');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('设了 WG_ADMIN_TOKEN：访客仍可聊天（SSE 正常完成）', async function () {
+  const chatStream = fakeChatStream(['好', '呀']);
+  const srv = await start(baseConfig(), {
+    streamChat: chatStream,
+    streamChatEvents: fakeEvents(['x']),
+    loadEnvFile: function () { return { WG_ADMIN_TOKEN: 't' }; },
+  });
+  try {
+    const res = await postChat(srv.base, { message: '在吗' });
+    assert.strictEqual(res.status, 200, '访客聊天放行');
+    const events = parseSse(await res.text());
+    const done = events[events.length - 1];
+    assert.strictEqual(done.type, 'done');
+    assert.strictEqual(done.ok, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('未设 WG_ADMIN_TOKEN：接口不设防（本机模式），登录接口明确拒绝', async function () {
+  const srv = await start(baseConfig({}), {
+    loadEnvFile: function () { return {}; },
+  });
+  try {
+    const res = await fetch(srv.base + '/api/features/bili/enabled', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.notStrictEqual(res.status, 401, '无 token 时不做鉴权拦截');
+
+    const health = await (await fetch(srv.base + '/api/health')).json();
+    assert.strictEqual(health.role, 'admin');
+
+    const login = await fetch(srv.base + '/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'x' }),
+    });
+    assert.strictEqual(login.status, 400, '未配置 token 时登录明确不可用');
+  } finally {
+    await srv.close();
+  }
+});
+

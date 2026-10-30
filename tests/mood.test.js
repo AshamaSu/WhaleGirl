@@ -205,3 +205,63 @@ test('能力模块：注册 /api/mood、注入 prompt、回复后更新并发事
   assert.strictEqual(emitted[0].value, 64);
   assert.match(blocks[0](), /心情不错|平静/);
 });
+
+// —— B2：mood 参数面板 ——
+
+test('mood 参数：store 每次调用前刷新，maxDelta/baseline 即刻生效', function () {
+  let params = { maxDelta: 3, baseline: 70 };
+  const store = createMoodStore({ root: tmpRoot(), settings: function () { return params; } });
+  // 空状态从基线开始
+  assert.strictEqual(store.snapshot(24).value, 70, '初始值 = 基线');
+  // 单轮上限被夹到 ±3
+  const entry = store.apply(99, '被猛夸');
+  assert.strictEqual(entry.delta, 3, '变化被夹到 maxDelta');
+  assert.strictEqual(entry.value, 73);
+  // 改参数后下一轮生效（热生效，无需重建 store）
+  params = { maxDelta: 5, baseline: 70 };
+  const entry2 = store.apply(-99, '被猛喷');
+  assert.strictEqual(entry2.delta, -5);
+});
+
+test('mood 参数路由：GET 给 4 项定义，POST 校验并写回 config.json', async function () {
+  const root = tmpRoot();
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ features: {} }));
+  const routes = {};
+  const sent = [];
+  const ctx = {
+    logger: QUIET,
+    bus: createBus({ logger: QUIET }),
+    dataRoot: tmpRoot(),
+    root: root,
+    route: function (method, pathname, handler) { routes[method + ' ' + pathname] = handler; },
+    addPromptBlock: function () {},
+    addAfterReply: function () {},
+    sendJson: function (res, status, data) { sent.push({ status: status, data: data }); },
+    makeLlm: function () { return null; },
+    getConfig: function () { return { features: { mood: {} } }; },
+    readJson: async function () { return this._body || {}; },
+  };
+  const module = createMoodModule({});
+  module.init(ctx);
+
+  assert.ok(routes['GET /api/features/mood/params'], '注册了 params 路由');
+  assert.ok(routes['POST /api/features/mood/params']);
+
+  routes['GET /api/features/mood/params']({ method: 'GET' }, {});
+  assert.strictEqual(sent[sent.length - 1].status, 200);
+  const got = sent[sent.length - 1].data;
+  assert.strictEqual(got.ok, true);
+  assert.strictEqual(got.core, true);
+  assert.strictEqual(got.params.length, 4);
+
+  ctx._body = { 'params.baseline': 5 };
+  await routes['POST /api/features/mood/params']({ method: 'POST' }, {});
+  assert.strictEqual(sent[sent.length - 1].status, 400, '低于下限被拒');
+
+  ctx._body = { 'params.baseline': 70 };
+  await routes['POST /api/features/mood/params']({ method: 'POST' }, {});
+  assert.strictEqual(sent[sent.length - 1].status, 200);
+  const saved = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+  assert.strictEqual(saved.features.mood.params.baseline, 70, '写回 features.mood.params');
+});
+

@@ -106,13 +106,24 @@ function stripTrailingCommas(text) {
  * patch 的值：原始类型 = 直接替换/追加；普通对象 = 递归进同名子对象块。
  * 数组 = 整体替换（紧凑单行）。
  */
+/** 把嵌套补丁摊平成点路径（段缺失时构造最小段用） */
+function subPatchFlat(value, prefix) {
+  const out = {};
+  for (const [key, val] of Object.entries(value)) {
+    const dotted = prefix ? prefix + '.' + key : key;
+    if (val && typeof val === 'object' && !Array.isArray(val)) Object.assign(out, subPatchFlat(val, dotted));
+    else out[dotted] = val;
+  }
+  return out;
+}
+
 function applyPatch(text, name, patch) {
   const feat = findObject(text, 0, 'features');
   if (!feat) throw new Error('config.json 里没有 features 段');
 
   const sec = findObject(text, feat.open, name);
   if (!sec) {
-    // 段缺失：构造单行最小段追加进 features（合法 JSON；缩进朴素但可读）
+    // 段缺失：把新段插进 features 收尾大括号之前（字符级定位，不受换行风格影响）
     const flat = {};
     for (const [key, value] of Object.entries(patch)) {
       flat[key] = value && typeof value === 'object' && !Array.isArray(value) ? subPatchFlat(value) : value;
@@ -120,7 +131,10 @@ function applyPatch(text, name, patch) {
     const sectionText = '{' + Object.entries(flat).map(function (entry) {
       return JSON.stringify(entry[0]) + ': ' + JSON.stringify(entry[1]);
     }).join(', ') + '}';
-    return stripTrailingCommas(appendKeyToBlock(text.slice(0, feat.close + 1), name, sectionText) + text.slice(feat.close + 1));
+    const head = text.slice(0, feat.close).replace(/[ \t\r\n]+$/, '');
+    const tail = text.slice(feat.close);
+    const needsComma = !/[{,]$/.test(head);
+    return head + (needsComma ? ',' : '') + '\n  "' + name + '": ' + sectionText + '\n' + tail;
   }
 
   const head = text.slice(0, sec.open);
@@ -140,6 +154,13 @@ function applyPatch(text, name, patch) {
       const subClose = matchBrace(block, subOpen);
       if (subOpen === -1 || subClose === -1) continue;
       let sub = block.slice(subOpen, subClose + 1);
+      if (sub.indexOf('\n') === -1) {
+        // 紧凑单行子块（行级替换帮不上忙，也没注释可保）：解析后整体重写
+        const merged = JSON.parse(stripComments(sub));
+        for (const [subKey, subValue] of Object.entries(value)) merged[subKey] = subValue;
+        block = block.slice(0, subOpen) + JSON.stringify(merged) + block.slice(subClose + 1);
+        continue;
+      }
       for (const [subKey, subValue] of Object.entries(value)) {
         const replaced = setKeyInBlock(sub, subKey, JSON.stringify(subValue));
         if (replaced !== null) sub = replaced;

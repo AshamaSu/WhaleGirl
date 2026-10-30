@@ -8,7 +8,7 @@ const path = require('node:path');
 const http = require('node:http');
 
 const { createServer } = require('../server');
-const { openMemory, listSessions, exportAll, importAll, safeSessionId } = require('../src/memory');
+const { openMemory, memorySettings, listSessions, exportAll, importAll, safeSessionId } = require('../src/memory');
 const { loadConfig } = require('../src/config');
 
 const ROOT = path.join(__dirname, '..');
@@ -70,6 +70,12 @@ async function start(config, deps) {
     disableBackground: true,
     loadConfig: function () { return config; },
   }, deps || {});
+  // 默认空 env：不读真实 .env（本机若设了 WG_ADMIN_TOKEN 会把写接口全 gate 掉）
+  if (!options.loadEnvFile) {
+    options.loadEnvFile = function () {
+      return {};
+    };
+  }
 
   const server = createServer(config, options);
   await new Promise(function (resolve) { server.listen(0, '127.0.0.1', resolve); });
@@ -170,19 +176,19 @@ test('恢复时结构不对的会话被跳过而不是整包失败', function ()
 
 // —— HTTP 层 ——
 
-test('能力关着时 /memory 与时间线接口都不存在，health 里如实汇报', async function () {
-  const app = await start(baseConfig({}));
+test('core 能力（memory/mood）即使配置未启用也恒在线，health 如实汇报', async function () {
+  const app = await start(baseConfig({ memory: { enabled: false }, mood: { enabled: false } }));
   try {
     const page = await fetch(app.base + '/memory');
-    assert.strictEqual(page.status, 404);
+    assert.strictEqual(page.status, 200);
 
     const timeline = await fetch(app.base + '/api/memory/timeline?sessionId=s1');
-    assert.strictEqual(timeline.status, 404);
+    assert.strictEqual(timeline.status, 200);
 
     const health = await (await fetch(app.base + '/api/health')).json();
     assert.deepStrictEqual(health.features, {
-      mood: { core: true, enabled: false, error: '' },
-      memory: { core: true, enabled: false, error: '' },
+      mood: { core: true, enabled: true, error: '' },
+      memory: { core: true, enabled: true, error: '' },
       bili: { core: false, enabled: false, error: '' },
     });
   } finally {
@@ -319,3 +325,74 @@ test('/api/events 把 mood 事件推给网页', async function () {
     await app.close();
   }
 });
+
+// —— B1：记忆参数面板 + memorySettings ——
+
+test('memorySettings：features.memory.params 优先于顶层 legacy，legacy 优先于默认', function () {
+  const base = memorySettings({});
+  assert.strictEqual(base.factDecay, 0.97, '默认衰减系数');
+
+  const legacy = memorySettings({ memory: { factDecay: 0.9 } });
+  assert.strictEqual(legacy.factDecay, 0.9, 'legacy 顶层段生效');
+
+  const both = memorySettings({
+    memory: { factDecay: 0.9 },
+    features: { memory: { params: { factDecay: 0.95 } } },
+  });
+  assert.strictEqual(both.factDecay, 0.95, '面板新位置优先');
+  assert.strictEqual(both.minStrength, 0.15, '未覆盖的键保留默认');
+});
+
+test('GET /api/features/memory/params 返回 7 项参数定义，core 标记为真', async function () {
+  const app = await start(baseConfig({}));
+  try {
+    const res = await fetch(app.base + '/api/features/memory/params');
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.ok, true);
+    assert.strictEqual(body.core, true);
+    assert.strictEqual(body.enabled, true, 'core 恒启用');
+    assert.strictEqual(body.params.length, 7);
+    assert.ok(body.params.some(function (p) { return p.key === 'params.factDecay'; }));
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/features/memory/params：合法值写回 config.json，非法值 400', async function () {
+  const root = tmpDir();
+  // 故意用单行 config：锁住「缺失段按字符级插入」的回归（曾把段插到顶层）
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ features: {} }));
+  const app = await start(baseConfig({}), { root: root });
+  try {
+    const bad = await fetch(app.base + '/api/features/memory/params', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'params.factDecay': 0.5 }),
+    });
+    assert.strictEqual(bad.status, 400, '低于下限被拒');
+
+    const ok = await fetch(app.base + '/api/features/memory/params', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'params.factDecay': 0.95, 'params.minStrength': 0.2 }),
+    });
+    assert.strictEqual(ok.status, 200);
+    const body = await ok.json();
+    assert.strictEqual(body.applied.factDecay, 0.95);
+
+    const saved = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    assert.strictEqual(saved.features.memory.params.factDecay, 0.95, '保注释写回到 features.memory.params');
+    assert.strictEqual(saved.features.memory.params.minStrength, 0.2);
+
+    const unknown = await fetch(app.base + '/api/features/memory/params', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'params.nonsense': 1 }),
+    });
+    assert.strictEqual(unknown.status, 400, '未知参数被拒');
+  } finally {
+    await app.close();
+  }
+});
+

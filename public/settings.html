@@ -110,7 +110,7 @@ function renderCard(name, info) {
     head.appendChild(toggle);
   }
 
-  if (!info.enabled) return card;
+  if (!info.enabled && !info.core) return card;
 
   var status = el('div', 'status');
   var errBox = el('div', 'err hidden');

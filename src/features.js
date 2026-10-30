@@ -149,6 +149,8 @@ function createFeatureHost(options) {
   }
 
   function enabledFor(module, config) {
+    // 宿主核心能力（core）恒启用：手改 config 也关不掉，面板与 enabled 接口只是第二道防线
+    if (module.core === true) return true;
     if (typeof module.enabled === 'function') return module.enabled(config) === true;
     return isEnabled(config, module.name);
   }

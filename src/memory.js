@@ -23,6 +23,17 @@ class MemoryError extends Error {
   }
 }
 
+/**
+ * 记忆参数合并：内置默认 ⊕ 顶层 memory 段（legacy，向后兼容）⊕ features.memory.params（参数面板新写入，优先）。
+ * 所有读参数的地方都应该走这里，别再直接摸 config.memory。
+ */
+function memorySettings(config) {
+  const cfg = config || {};
+  const legacy = cfg.memory || {};
+  const params = (cfg.features && cfg.features.memory && cfg.features.memory.params) || {};
+  return Object.assign({}, DEFAULTS, legacy, params);
+}
+
 function safeSessionId(raw) {
   const id = String(raw == null ? '' : raw).trim().replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
   return id === '' ? 'default' : id;
@@ -502,6 +513,7 @@ async function summarizeTurns(llm, turns, previousSummary) {
 module.exports = {
   MemoryError: MemoryError,
   openMemory: openMemory,
+  memorySettings: memorySettings,
   safeSessionId: safeSessionId,
   normalizeFact: normalizeFact,
   parseFacts: parseFacts,

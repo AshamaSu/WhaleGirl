@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { isEnabled } = require('./settings');
+const configEdit = require('../config-edit');
 
 const MOOD_DIR = 'data';
 const MOOD_FILE = 'mood.json';
@@ -16,6 +17,74 @@ const MAX_HISTORY = 500;
 const BASELINE = 60;      // 回落基线
 const HYSTERESIS = 2;     // 档位迟滞回差（对齐方案 §8.3：81 不切档、83 切）
 const DECAY_MAX = 2;      // 每小时最多回落 2 点
+
+/** 可调参数（features.mood.params）：档位表/颜色/0-100 边界等结构性常量保持硬编码 */
+const MOOD_PARAM_DEFAULTS = {
+  baseline: BASELINE,         // 闲置回落基线
+  maxDelta: MAX_DELTA,        // 单轮变化上限（±）
+  hysteresis: HYSTERESIS,     // 档位迟滞回差
+  decayMaxPerHour: DECAY_MAX, // 闲置回落速率（点/小时；低于基线时固定 +1/小时）
+};
+
+function moodSettings(config) {
+  const params = (config && config.features && config.features.mood && config.features.mood.params) || {};
+  return Object.assign({}, MOOD_PARAM_DEFAULTS, params);
+}
+
+const PARAM_SPECS = [
+  { key: 'params.baseline', type: 'number', label: '回落基线', min: 20, max: 90, default: 60, desc: '闲置一段时间后心情向这个值靠拢' },
+  { key: 'params.maxDelta', type: 'number', label: '单轮变化上限（±）', min: 1, max: 20, default: 8, desc: '被夸/被冒犯最多动多少点' },
+  { key: 'params.hysteresis', type: 'number', label: '档位回差', min: 0, max: 5, default: 2, desc: '档位边界留的余量，防止数值抖动来回跳档' },
+  { key: 'params.decayMaxPerHour', type: 'number', label: '闲置回落速率（点/小时）', min: 0, max: 10, default: 2, desc: '高于基线时每小时最多回落这么多；低于基线时固定 +1/小时；0 = 不回落' },
+];
+
+const SPEC_MAP = {};
+for (const spec of PARAM_SPECS) SPEC_MAP[spec.key] = spec;
+
+/** 单个参数值校验；返回错误文案或 null（形状与 memory 的 validateSpec 一致） */
+function validateSpec(spec, value) {
+  if (spec.type === 'boolean') return typeof value === 'boolean' ? null : '必须是 true/false';
+  if (spec.type === 'number') {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '必须是数字';
+    if (spec.min !== undefined && num < spec.min) return '不能小于 ' + spec.min;
+    if (spec.max !== undefined && num > spec.max) return '不能大于 ' + spec.max;
+    return null;
+  }
+  return '未知类型';
+}
+
+/**
+ * 参数面板写入口：校验 patch → 保注释写回 config.json 的 features.mood.params。
+ * 返回 { ok, applied } 或 { ok: false, errors: [...] }。
+ */
+function applyMoodParams(root, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, errors: ['请求体必须是对象'] };
+  const flat = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [sub, subValue] of Object.entries(value)) flat[key + '.' + sub] = subValue;
+    } else {
+      flat[key] = value;
+    }
+  }
+  const errors = [];
+  const writePatch = {};
+  for (const [key, value] of Object.entries(flat)) {
+    const spec = SPEC_MAP[key];
+    if (!spec) { errors.push('不认识的参数：' + key); continue; }
+    const error = validateSpec(spec, value);
+    if (error) { errors.push(spec.label + '(' + key + ')' + error); continue; }
+    const [parent, leaf] = key.split('.');
+    if (!writePatch[parent]) writePatch[parent] = {};
+    writePatch[parent][leaf] = value;
+  }
+  if (errors.length > 0) return { ok: false, errors: errors };
+  const result = configEdit.patchFeatureSection(root, 'mood', writePatch);
+  if (!result.ok) return { ok: false, errors: [result.error || '写回 config.json 失败'] };
+  const applied = result.applied || {};
+  return { ok: true, applied: applied.params || {} };
+}
 
 /** 档位表现表：颜色/文字/光/档位点/心声/语气指令都收在这里，前后端只有这一处定义 */
 const MOOD_PROFILES = [
@@ -68,7 +137,8 @@ function baseProfileIndex(value) {
 }
 
 /** 带迟滞的档位判定：进档/出档各留 3 点回差，避免边界抖动 */
-function profileOf(value, previousId) {
+function profileOf(value, previousId, hysteresis) {
+  const h = Number.isFinite(hysteresis) ? hysteresis : HYSTERESIS;
   const base = baseProfileIndex(value);
   const prev = previousId ? profileIndexById(previousId) : -1;
   if (prev === -1 || prev === base) return MOOD_PROFILES[base];
@@ -76,11 +146,11 @@ function profileOf(value, previousId) {
   if (base > prev) {
     let target = prev;
     for (let i = prev + 1; i <= base; i += 1) {
-      if (num >= MOOD_PROFILES[i].min + HYSTERESIS) target = i;
+      if (num >= MOOD_PROFILES[i].min + h) target = i;
     }
     return MOOD_PROFILES[target];
   }
-  const leave = MOOD_PROFILES[prev].min - HYSTERESIS;
+  const leave = MOOD_PROFILES[prev].min - h;
   return num <= leave ? MOOD_PROFILES[base] : MOOD_PROFILES[prev];
 }
 
@@ -89,8 +159,8 @@ function moodLabel(value) {
 }
 
 /** 给 /api/mood 与 SSE 的展示层字段；前端不再持有任何色值 */
-function displayOf(value, previousId) {
-  const profile = profileOf(value, previousId);
+function displayOf(value, previousId, hysteresis) {
+  const profile = profileOf(value, previousId, hysteresis);
   return {
     id: profile.id,
     label: profile.label,
@@ -108,20 +178,22 @@ function clampValue(value) {
   return Math.min(MAX_VALUE, Math.max(MIN_VALUE, Math.round(num)));
 }
 
-/** 心情增量只允许 -5 ~ +5，NaN 按 0 处理 */
-function clampDelta(value) {
+/** 心情增量限制在 ±maxDelta（缺省走常量），NaN 按 0 处理 */
+function clampDelta(value, maxDelta) {
+  const limit = Number.isFinite(maxDelta) ? maxDelta : MAX_DELTA;
   const num = Number(value);
   if (!Number.isFinite(num)) return 0;
-  return Math.min(MAX_DELTA, Math.max(-MAX_DELTA, Math.round(num)));
+  return Math.min(limit, Math.max(-limit, Math.round(num)));
 }
 
 function nowIso(clock) {
   return (clock ? clock() : new Date()).toISOString();
 }
 
-function emptyState(clock) {
+function emptyState(clock, baseline) {
+  const start = Number.isFinite(baseline) ? baseline : DEFAULT_VALUE;
   const at = nowIso(clock);
-  return { value: DEFAULT_VALUE, label: moodLabel(DEFAULT_VALUE), profile: profileOf(DEFAULT_VALUE, null).id, createdAt: at, updatedAt: at, history: [] };
+  return { value: start, label: moodLabel(start), profile: profileOf(start, null).id, createdAt: at, updatedAt: at, history: [] };
 }
 
 function normalizeEntry(raw) {
@@ -133,10 +205,10 @@ function normalizeEntry(raw) {
   };
 }
 
-function normalizeState(raw, clock) {
+function normalizeState(raw, clock, hysteresis) {
   const value = clampValue(raw.value);
   const history = Array.isArray(raw.history) ? raw.history.map(normalizeEntry) : [];
-  const profile = profileOf(value, raw.profile);
+  const profile = profileOf(value, raw.profile, hysteresis);
   return {
     value: value,
     label: profile.label,
@@ -156,18 +228,24 @@ function createMoodStore(options) {
   const root = opts.root || process.cwd();
   const clock = typeof opts.now === 'function' ? opts.now : null;
   const warn = typeof opts.onWarn === 'function' ? opts.onWarn : function () {};
+  // 参数面板可调：每次公开调用前刷新一次，改完参数下一轮就生效（无需重启）
+  const settingsOf = typeof opts.settings === 'function' ? opts.settings : null;
+  let S = Object.assign({}, MOOD_PARAM_DEFAULTS, settingsOf ? (settingsOf() || {}) : {});
+  function refreshSettings() {
+    S = Object.assign({}, MOOD_PARAM_DEFAULTS, settingsOf ? (settingsOf() || {}) : {});
+  }
 
   const dir = path.join(root, MOOD_DIR);
   const file = path.join(dir, MOOD_FILE);
   let state = load();
 
   function load() {
-    if (!fs.existsSync(file)) return emptyState(clock);
+    if (!fs.existsSync(file)) return emptyState(clock, S.baseline);
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('结构不对');
       if (!Number.isFinite(Number(parsed.value))) throw new Error('value 不是数字');
-      return normalizeState(parsed, clock);
+      return normalizeState(parsed, clock, S.hysteresis);
     } catch (err) {
       const bad = file + '.corrupt-' + Date.now();
       try {
@@ -176,7 +254,7 @@ function createMoodStore(options) {
         // 挪不动就算了，下面会覆盖
       }
       warn('心情文件损坏，已备份到 ' + bad + '（' + err.message + '）');
-      return emptyState(clock);
+      return emptyState(clock, S.baseline);
     }
   }
 
@@ -196,6 +274,7 @@ function createMoodStore(options) {
    * 读时 lazy 计算并落盘，不引入常驻定时器。
    */
   function decay() {
+    refreshSettings();
     const now = clock ? clock() : new Date();
     const last = Date.parse(state.updatedAt);
     if (!Number.isFinite(last)) return false;
@@ -205,15 +284,15 @@ function createMoodStore(options) {
     let value = state.value;
     const before = value;
     for (let i = 0; i < steps; i += 1) {
-      if (value > BASELINE) value -= Math.min(DECAY_MAX, Math.ceil((value - BASELINE) / 2));
-      else if (value < BASELINE) value += 1;
+      if (value > S.baseline) value -= Math.min(S.decayMaxPerHour, Math.ceil((value - S.baseline) / 2));
+      else if (value < S.baseline) value += 1;
       else break;
     }
     if (value === before) return false;
     const at = now.toISOString();
     state.value = clampValue(value);
     state.label = moodLabel(state.value);
-    state.profile = profileOf(state.value, state.profile).id;
+    state.profile = profileOf(state.value, state.profile, S.hysteresis).id;
     state.updatedAt = at;
     state.history.push({ at: at, delta: state.value - before, value: state.value, reason: '一阵子没说话，慢慢回落' });
     if (state.history.length > MAX_HISTORY) state.history = state.history.slice(-MAX_HISTORY);
@@ -223,6 +302,7 @@ function createMoodStore(options) {
 
   /** hours 决定时间线回溯多久（默认 24 小时）；读之前先折算闲置回落 */
   function snapshot(hours) {
+    refreshSettings();
     decay();
     const span = Number(hours) > 0 ? Number(hours) : 24;
     const since = (clock ? clock() : new Date()).getTime() - span * 3600 * 1000;
@@ -230,24 +310,25 @@ function createMoodStore(options) {
       const at = new Date(entry.at).getTime();
       return Number.isFinite(at) && at >= since;
     });
-    const profile = profileOf(state.value, state.profile);
+    const profile = profileOf(state.value, state.profile, S.hysteresis);
     return {
       value: state.value,
       label: profile.label,
       profile: profile.id,
       updatedAt: state.updatedAt,
-      display: displayOf(state.value, state.profile),
+      display: displayOf(state.value, state.profile, S.hysteresis),
       history: history,
     };
   }
 
   function apply(delta, reason) {
-    const step = clampDelta(delta);
+    refreshSettings();
+    const step = clampDelta(delta, S.maxDelta);
     const value = clampValue(state.value + step);
     const at = nowIso(clock);
     const entry = { at: at, delta: step, value: value, reason: String(reason == null ? '' : reason).slice(0, 120) };
 
-    const profile = profileOf(value, state.profile);
+    const profile = profileOf(value, state.profile, S.hysteresis);
     state.value = value;
     state.label = profile.label;
     state.profile = profile.id;
@@ -259,7 +340,8 @@ function createMoodStore(options) {
   }
 
   function reset() {
-    state = emptyState(clock);
+    refreshSettings();
+    state = emptyState(clock, S.baseline);
     save();
     return snapshot(24);
   }
@@ -351,6 +433,9 @@ function createMoodModule(options) {
         root: ctx.dataRoot,
         now: opts.now,
         onWarn: function (msg) { ctx.logger.warn('[mood] ' + msg); },
+        settings: function () {
+          return moodSettings(typeof ctx.getConfig === 'function' ? ctx.getConfig() : {});
+        },
       });
       const llmFor = typeof opts.llm === 'function' ? opts.llm : function () { return ctx.makeLlm(); };
 
@@ -382,6 +467,29 @@ function createMoodModule(options) {
         ctx.sendJson(res, 200, { ok: true, mood: store.snapshot(24) });
       });
 
+      // —— 参数面板契约（与 memory/bili 同一形状）——
+      ctx.route('GET', '/api/features/mood/params', function (req, res) {
+        const config = typeof ctx.getConfig === 'function' ? ctx.getConfig() : {};
+        const section = (config.features && config.features.mood) || {};
+        ctx.sendJson(res, 200, {
+          ok: true,
+          enabled: true,
+          core: true,
+          section: section,
+          params: PARAM_SPECS,
+        });
+      });
+
+      ctx.route('POST', '/api/features/mood/params', async function (req, res) {
+        const body = await ctx.readJson(req, 64 * 1024).catch(function () { return null; });
+        const result = applyMoodParams(ctx.root, body || {});
+        if (!result.ok) {
+          ctx.sendJson(res, 400, { ok: false, errors: result.errors || ['参数不合法'] });
+          return;
+        }
+        ctx.sendJson(res, 200, { ok: true, applied: result.applied });
+      });
+
       ctx.addAfterReply(async function (info) {
         const llm = llmFor();
         if (typeof llm !== 'function') return;
@@ -409,6 +517,9 @@ function createMoodModule(options) {
 module.exports = {
   createMoodModule: createMoodModule,
   createMoodStore: createMoodStore,
+  moodSettings: moodSettings,
+  applyMoodParams: applyMoodParams,
+  PARAM_SPECS: PARAM_SPECS,
   MOOD_PROFILES: MOOD_PROFILES,
   profileOf: profileOf,
   displayOf: displayOf,
