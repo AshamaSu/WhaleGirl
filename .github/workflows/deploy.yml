@@ -28,8 +28,14 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
+            # 首次部署：服务器上没有代码就先 clone（仓库公开，HTTPS 即可）
+            if [ ! -d /opt/whale-girl/.git ]; then
+              echo '首次部署：clone 仓库到 /opt/whale-girl'
+              git clone https://github.com/AshamaSu/WhaleGirl.git /opt/whale-girl
+            fi
             cd /opt/whale-girl
-            git pull --ff-only origin main
+            git fetch origin main
+            git reset --hard origin/main
             sudo -n systemctl restart whale-girl
             for i in 1 2 3 4 5; do
               sleep 2
