@@ -694,3 +694,33 @@ test('未设 WG_ADMIN_TOKEN：接口不设防（本机模式），登录接口�
   }
 });
 
+
+test('调试接口：访客 403，管理员拿到运行状态', async function () {
+  const TOKEN = 'dbg-token-1';
+  const srv = await start(baseConfig({}), {
+    loadEnvFile: function () { return { WG_ADMIN_TOKEN: TOKEN }; },
+  });
+  try {
+    const guest = await fetch(srv.base + '/api/debug/state');
+    assert.strictEqual(guest.status, 403, 'GET 也挡访客');
+
+    const login = await fetch(srv.base + '/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN }),
+    });
+    const cookie = (login.headers.get('set-cookie') || '').split(';')[0];
+    const admin = await fetch(srv.base + '/api/debug/state', { headers: { cookie: cookie } });
+    assert.strictEqual(admin.status, 200);
+    const body = await admin.json();
+    assert.strictEqual(body.ok, true);
+    assert.ok(body.uptimeSec >= 0);
+    assert.ok(body.memory.rssMb > 0);
+    assert.strictEqual(body.provider, 'deepseek');
+    assert.ok(Array.isArray(body.dataFiles));
+    assert.strictEqual(typeof body.latestLog, 'string');
+  } finally {
+    await srv.close();
+  }
+});
+

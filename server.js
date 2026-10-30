@@ -846,6 +846,43 @@ function createServer(config, deps) {
       }
     }
 
+    if (pathname === '/api/debug/state') {
+      // C2：远程排障第一入口（管理员专属；GET 也挡访客）
+      if (!admin) {
+        sendJson(res, 403, { ok: false, error: '仅管理员可看调试状态' });
+        return;
+      }
+      let liveDbg = null;
+      try { liveDbg = resolveLive(); } catch (err) { liveDbg = null; }
+      const mem = process.memoryUsage();
+      let latestLog = '';
+      try {
+        const files = fs.readdirSync(path.join(root, 'logs')).filter(function (f) { return f.indexOf('server-') === 0; }).sort();
+        if (files.length > 0) latestLog = path.join(root, 'logs', files[files.length - 1]);
+      } catch (err) { /* 没有 logs 目录就空着 */ }
+      const dataFiles = [];
+      try {
+        fs.readdirSync(dataRoot).forEach(function (f) {
+          let st;
+          try { st = fs.statSync(path.join(dataRoot, f)); } catch (e) { return; }
+          if (st.isFile()) dataFiles.push({ file: f, kb: Math.round(st.size / 1024) });
+        });
+      } catch (err) { /* data 目录不在就空着 */ }
+      sendJson(res, 200, {
+        ok: true,
+        node: process.version,
+        uptimeSec: Math.round(process.uptime()),
+        memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(mem.heapUsed / 1048576) },
+        provider: liveDbg ? liveDbg.provider.name : '',
+        model: liveDbg ? liveDbg.provider.chatModel : '',
+        hotReload: hotReload,
+        features: featureHost ? featureHost.state() : {},
+        dataFiles: dataFiles,
+        latestLog: latestLog,
+      });
+      return;
+    }
+
     if (pathname === '/api/health') {
       let live;
       try {
