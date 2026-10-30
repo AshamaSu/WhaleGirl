@@ -87,12 +87,22 @@ async function runBiliRound(options) {
   let toolCalls = 0;
 
   try {
+    // A2：特别关注 UP 的最新视频，注入章程做优先候选；抓不到就留空，绝不阻塞本轮
+    let specialVideos = '';
+    if (typeof opts.fetchSpecialVideos === 'function') {
+      try {
+        specialVideos = String(await opts.fetchSpecialVideos()) || '';
+      } catch (err) {
+        logger.warn('[bili] 特别关注候选抓取失败，本轮跳过该来源：' + (err && err.message ? err.message : err));
+      }
+    }
     const duty = buildDuty({
       root: opts.root,
       file: section.dutyFile,
       section: section,
       seen: store.seenLines(40),
       ownerBiliName: String(opts.ownerBiliName || ''),
+      specialVideos: specialVideos,
     });
 
     const messages = [

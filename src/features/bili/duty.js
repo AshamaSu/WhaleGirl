@@ -6,7 +6,7 @@ const path = require('node:path');
 const DEFAULT_DUTY_FILE = 'prompts/bili-duty.md';
 const MAX_SEEN_LINES = 40;
 
-const PLACEHOLDERS = ['owner', 'keywords', 'seen', 'minPlays', 'maxDaysOld', 'n', 'ownerBiliName'];
+const PLACEHOLDERS = ['owner', 'keywords', 'seen', 'minPlays', 'maxDaysOld', 'n', 'ownerBiliName', 'specialVideos'];
 
 function readDuty(root, file) {
   const target = path.isAbsolute(String(file || '')) ? file : path.join(root, file || DEFAULT_DUTY_FILE);
@@ -60,6 +60,7 @@ function buildDuty(options) {
     maxDaysOld: Number(section.maxDaysOld) > 0 ? Number(section.maxDaysOld) : 0,
     n: Number(section.itemsPerRound) > 0 ? Number(section.itemsPerRound) : 1,
     ownerBiliName: String(opts.ownerBiliName || ''),
+    specialVideos: String(opts.specialVideos || ''),
   });
   return { text: text, path: loaded.path };
 }

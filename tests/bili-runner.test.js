@@ -148,3 +148,56 @@ test('播报指令把报告塞给主娘，并禁止她念报告', function () {
   assert.match(messages[1].content, /不要提"报告"/);
   assert.match(messages[1].content, /BV1gExu6GEjZ/);
 });
+
+// —— A2：特别关注优先候选 ——
+
+test('runBiliRound：fetchSpecialVideos 的文本注入章程，抓取失败不阻塞本轮', async function () {
+  const seen = [];
+  const env = setup({
+    fetchSpecialVideos: async function () { return '- 《朋友的新视频》 UP：老王 https://www.bilibili.com/video/BV1friend111'; },
+    runAgent: fakeAgent(function () {
+      // 借 fakeAgent 不够：需要拿到 messages，改用包装 runAgent 捕获后吐正常报告
+      return [];
+    }),
+  });
+  // 直接包一层捕获 messages 的 agent
+  const original = env.options.runAgent;
+  env.options.runAgent = function (input) {
+    seen.push(input.messages);
+    return (async function* () {
+      yield { type: 'final', text: REPORT };
+    })();
+  };
+
+  const result = await runBiliRound(env.options);
+  assert.equal(result.ok, true, JSON.stringify({ error: result.error }));
+  assert.equal(seen.length, 1);
+  assert.match(seen[0][0].content, /朋友的新视频/, '特别关注视频进入章程');
+  assert.match(seen[0][0].content, /优先/, '带优先指令');
+});
+
+test('runBiliRound：fetchSpecialVideos 抛错时章程里没有候选，轮次照常成功', async function () {
+  const seen = [];
+  const env = setup({
+    fetchSpecialVideos: async function () { throw new Error('网络炸了'); },
+  });
+  env.options.runAgent = function (input) {
+    seen.push(input.messages);
+    return (async function* () { yield { type: 'final', text: REPORT }; })();
+  };
+
+  const result = await runBiliRound(env.options);
+  assert.equal(result.ok, true);
+  assert.doesNotMatch(seen[0][0].content, /朋友的新视频/);
+  assert.match(env.logs.join('\n'), /特别关注候选抓取失败/);
+});
+
+test('duty 占位符 {specialVideos} 正常替换且值不被二次展开', function () {
+  const { renderDuty } = require('../src/features/bili/duty');
+  const out = renderDuty('A\n{specialVideos}\nB {n}', {
+    specialVideos: '- 视频里写了 {n} 号占位符',
+    n: '2',
+  });
+  assert.equal(out, 'A\n- 视频里写了 {n} 号占位符\nB 2', '值里的占位符字样保持字面，不递归展开');
+});
+

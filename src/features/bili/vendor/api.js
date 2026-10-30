@@ -229,6 +229,30 @@ function createBiliApi(client, options) {
   }
 
   /**
+   * 指定 UP 的最新投稿（wbi 签名接口，实测可用：is_risk=false）。
+   * 返回 [{ bvid, title, up, play, created(秒), link }]，供特别关注优先选题用。
+   */
+  async function spaceVideos(params) {
+    const p = params || {};
+    const mid = Number(p.mid) || 0;
+    if (mid <= 0) throw new BiliError('spaceVideos 需要 mid', 0);
+    const ps = Math.min(10, Math.max(1, Number(p.ps) || 2));
+    const data = await client.getSigned('/x/space/wbi/arc/search', { mid: mid, ps: ps, pn: 1, order: 'pubdate' });
+    const vlist = (data && data.list && Array.isArray(data.list.vlist)) ? data.list.vlist : [];
+    return vlist.map(function (item) {
+      const bvid = String(item.bvid || '');
+      return {
+        bvid: bvid,
+        title: stripTags(item.title),
+        up: String(item.author || ''),
+        play: Number(item.play) || 0,
+        created: Number(item.created) || 0,
+        link: bvid ? 'https://www.bilibili.com/video/' + bvid : '',
+      };
+    });
+  }
+
+  /**
    * 关注/取关（act: 1=关注 2=取关）。写操作走 client.post（自动带 csrf + 限速队列）。
    * 调用方负责前置校验（是否已关注、特别关注保护）与记录。
    */

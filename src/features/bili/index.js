@@ -408,6 +408,7 @@ function createBiliModule(options) {
             now: clock,
             runAgent: runAgent,
             ownerBiliName: ownerBiliName,
+            fetchSpecialVideos: fetchSpecialVideosText,
             timeoutMs: live.requestTimeoutMs,
           });
           lastResult = result;
@@ -466,6 +467,29 @@ function createBiliModule(options) {
         }).then(function () {
           replyChecking = false;
         });
+      }
+
+      /**
+       * A2：特别关注 UP 的最新视频 → 章程优先候选文本。
+       * 名单里没有特别关注就返回空串；单个 UP 失败只跳过该 UP。
+       */
+      async function fetchSpecialVideosText() {
+        let list = [];
+        try { list = store.getFollows().filter(function (item) { return item.special === true; }); } catch (err) { list = []; }
+        if (list.length === 0) return '';
+        const lines = [];
+        const ups = list.slice(0, 10);
+        for (let i = 0; i < ups.length; i += 1) {
+          try {
+            const videos = await api.spaceVideos({ mid: ups[i].mid, ps: 2 });
+            videos.slice(0, 2).forEach(function (video) {
+              lines.push('- 《' + video.title + '》 UP：' + (video.up || ups[i].uname || ups[i].mid) + ' ' + video.link + (video.play > 0 ? '（播放 ' + video.play + '）' : ''));
+            });
+          } catch (err) {
+            logger.warn('[bili] 特别关注 UP ' + ups[i].mid + ' 最新视频抓取失败，跳过：' + (err && err.message ? err.message : err));
+          }
+        }
+        return lines.join('\n');
       }
 
       // 扫「登录账号自己」的关注列表找目标 mid（最多 4 页 × 50 条）；没有 → null
