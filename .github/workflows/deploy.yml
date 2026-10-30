@@ -1,6 +1,8 @@
 name: deploy
 
-# 单人项目：main 分支测试通过即部署，不做 PR 预览与 staging
+# 单人项目：main 分支测试通过即部署，不做 PR 预览与 staging。
+# 服务器在国内直连 GitHub 不可靠，所以不走服务器侧 git pull：
+# CI 打包 checkout 产物 → scp 上服务器 → 解包覆盖 → 重启 → 探活，失败回滚上一版。
 on:
   push:
     branches: [main]
@@ -19,7 +21,22 @@ jobs:
       - name: 测试
         run: npm test
 
-      - name: 部署到腾讯云
+      - name: 打包
+        if: success()
+        run: tar czf /tmp/release.tgz --exclude='.git' .
+
+      - name: 上传到服务器
+        if: success()
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: /tmp/release.tgz
+          target: /tmp
+          strip_components: 2
+
+      - name: 解包并重启
         if: success()
         uses: appleboy/ssh-action@v1
         with:
@@ -29,13 +46,11 @@ jobs:
           script: |
             set -e
             fail() { echo "::error::$1"; exit 1; }
-            if [ ! -d /opt/whale-girl/.git ]; then
-              echo '首次部署：clone 仓库到 /opt/whale-girl'
-              git clone https://github.com/AshamaSu/WhaleGirl.git /opt/whale-girl 2>&1 || fail 'clone 失败：检查服务器能否访问 github.com（curl -sI https://github.com 试试）'
-            fi
-            cd /opt/whale-girl || fail '/opt/whale-girl 不存在且 clone 失败'
-            git fetch origin main 2>&1 || fail 'git fetch 失败：服务器网络或仓库访问问题'
-            git reset --hard origin/main 2>&1 || fail 'git reset 失败：仓库状态异常'
+            mkdir -p /opt/whale-girl
+            # 留一份上一版包用于回滚
+            [ -f /opt/whale-girl/release.tgz ] && cp /opt/whale-girl/release.tgz /tmp/release-prev.tgz || true
+            tar xzf /tmp/release.tgz -C /opt/whale-girl
+            cp /tmp/release.tgz /opt/whale-girl/release.tgz
             sudo -n systemctl restart whale-girl 2>&1 || fail 'systemctl restart 失败：whale-girl.service 未安装（先做手册第 4 节）或 sudo 未免密（第 7 节 visudo）'
             ok=0
             for i in 1 2 3 4 5; do
@@ -46,4 +61,9 @@ jobs:
                 break
               fi
             done
-            [ "$ok" = "1" ] || { echo '::error::health 探测 5 次全失败：服务起了但 8787 没响应——journalctl -u whale-girl -n 30 看启动日志（多为 /etc/whale-girl.env 缺失或端口被占）'; git reset --hard ORIG_HEAD 2>/dev/null; sudo -n systemctl restart whale-girl 2>&1 || true; exit 1; }
+            [ "$ok" = "1" ] || {
+              echo '::error::health 探测 5 次全失败：journalctl -u whale-girl -n 30 看启动日志（多为 /etc/whale-girl.env 缺失、Node 未装或端口被占）'
+              if [ -f /tmp/release-prev.tgz ]; then tar xzf /tmp/release-prev.tgz -C /opt/whale-girl; fi
+              sudo -n systemctl restart whale-girl 2>&1 || true
+              exit 1
+            }
