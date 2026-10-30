@@ -23,7 +23,7 @@ jobs:
 
       - name: 打包
         if: success()
-        run: tar czf /tmp/release.tgz --exclude='.git' .
+        run: tar czf release.tgz --exclude='.git' --exclude='release.tgz' .
 
       - name: 上传到服务器
         if: success()
@@ -32,9 +32,8 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: /tmp/release.tgz
+          source: release.tgz
           target: /tmp
-          strip_components: 2
 
       - name: 解包并重启
         if: success()
