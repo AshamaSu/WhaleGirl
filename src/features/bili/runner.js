@@ -45,6 +45,67 @@ function parsePickedItems(report) {
   return items;
 }
 
+const INTERACT_TYPES = ['likes', 'coins', 'favorites', 'replies', 'dynamics', 'follows'];
+const INTERACT_LABELS = {
+  likes: '点赞',
+  coins: '投币',
+  favorites: '收藏',
+  replies: '评论',
+  dynamics: '动态',
+  follows: '关注',
+};
+
+/** 把真实互动记录压成「点赞、投币」这样的短语；没有就返回「无」 */
+function describeInteractions(list) {
+  const rows = Array.isArray(list) ? list : [];
+  if (rows.length === 0) return '无';
+  const counts = {};
+  for (let i = 0; i < rows.length; i += 1) {
+    const type = String((rows[i] && rows[i].type) || '');
+    if (!INTERACT_LABELS[type]) continue;
+    counts[type] = (counts[type] || 0) + 1;
+  }
+  const parts = [];
+  for (let i = 0; i < INTERACT_TYPES.length; i += 1) {
+    const type = INTERACT_TYPES[i];
+    const n = counts[type] || 0;
+    if (n <= 0) continue;
+    parts.push(n > 1 ? INTERACT_LABELS[type] + ' ' + n + ' 次' : INTERACT_LABELS[type]);
+  }
+  return parts.length ? parts.join('、') : '无';
+}
+
+/**
+ * 用真实互动记录重写报告里的「互动：」行，末尾再补一行总账。
+ * 模型爱把没做的事写成「已评论/已投币」，这里不给它说话的机会：
+ * 只有 tool 真调用成功、记录进了 interactLog，才算这一条有过互动。
+ */
+function applyInteractionFacts(body, acts) {
+  const rows = Array.isArray(acts) ? acts : [];
+  const byBvid = {};
+  for (let i = 0; i < rows.length; i += 1) {
+    const bvid = String((rows[i] && rows[i].bvid) || '').trim().toUpperCase();
+    if (!bvid) continue;
+    if (!byBvid[bvid]) byBvid[bvid] = [];
+    byBvid[bvid].push(rows[i]);
+  }
+
+  const lines = String(body == null ? '' : body).split('\n');
+  const out = [];
+  let current = '';
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const head = ITEM_HEAD.exec(line.trim());
+    if (head) current = head[1].toUpperCase();
+    if (/^\s*互动[:：]/.test(line)) {
+      out.push('互动：' + describeInteractions(byBvid[current] || []));
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n').trim() + '\n\n本轮实际互动：' + describeInteractions(rows) + '\n';
+}
+
 function triggerText(trigger) {
   return trigger === 'auto' ? '自动' : '手动';
 }
@@ -78,6 +139,7 @@ async function runBiliRound(options) {
   if (typeof opts.runAgent !== 'function') throw new Error('runBiliRound 需要 runAgent（由宿主 makeAgent 提供）');
   const agent = opts.runAgent;
   const at = clock();
+  const startedAt = at instanceof Date ? at.getTime() : new Date(at).getTime();
   const trigger = opts.trigger === 'auto' ? 'auto' : 'manual';
   const header = '## ' + store.stamp(at) + ' · ' + triggerText(trigger);
   const maxRounds = Number(section.maxRounds) > 0 ? Number(section.maxRounds) : DEFAULT_MAX_ROUNDS;
@@ -132,8 +194,11 @@ async function runBiliRound(options) {
       throw new Error('模型把工具调用写成了文本（DSML），本轮作废；通常是工具轮次用尽后仍想继续调用');
     }
 
-    report = sectionReport(header, body);
-    picked = parsePicked(body);
+    // 互动行只认 interactLog 里真实落库的记录，模型写的"已评论/已投币"一律覆盖
+    const acts = typeof store.interactSince === 'function' ? store.interactSince(startedAt) : [];
+    const truthful = applyInteractionFacts(body, acts);
+    report = sectionReport(header, truthful);
+    picked = parsePicked(truthful);
 
     store.appendReport(report, at);
     store.appendDigest(report, at);
@@ -328,6 +393,8 @@ module.exports = {
   notifyLine: notifyLine,
   parsePicked: parsePicked,
   parsePickedItems: parsePickedItems,
+  applyInteractionFacts: applyInteractionFacts,
+  describeInteractions: describeInteractions,
   buildUserMessage: buildUserMessage,
   buildAnnounceMessages: buildAnnounceMessages,
   splitBubbles: splitBubbles,

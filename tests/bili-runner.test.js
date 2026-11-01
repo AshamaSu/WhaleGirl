@@ -201,3 +201,67 @@ test('duty 占位符 {specialVideos} 正常替换且值不被二次展开', func
   assert.equal(out, 'A\n- 视频里写了 {n} 号占位符\nB 2', '值里的占位符字样保持字面，不递归展开');
 });
 
+
+test('applyInteractionFacts：模型编的互动行被真实记录覆盖，末尾记总账', function () {
+  const { applyInteractionFacts } = require('../src/features/bili/runner');
+  const body = [
+    '### BV1gExu6GEjZ',
+    '标题：鲸鱼观察日记',
+    '互动：点赞+投币1枚，已评论：「这个卡点也太丝滑了吧！给你投币啦～」',
+    '',
+    '### BV1aaaaaaaaa',
+    '标题：第二条',
+    '互动：无',
+    '',
+    '因无字幕跳过 1 条',
+  ].join('\n');
+
+  const out = applyInteractionFacts(body, [
+    { at: FIXED.toISOString(), type: 'likes', bvid: 'BV1gExu6GEjZ', detail: '点赞' },
+    { at: FIXED.toISOString(), type: 'coins', bvid: 'bv1gExu6gejz', detail: '投币' },
+  ]);
+
+  assert.ok(out.indexOf('已评论') === -1, '编造的评论不能留下');
+  assert.match(out, /### BV1gExu6GEjZ[\s\S]*?互动：点赞、投币/, '有真实记录的条目写实情');
+  assert.match(out, /### BV1aaaaaaaaa[\s\S]*?互动：无/, '没有记录的条目写无');
+  assert.match(out, /本轮实际互动：点赞、投币\s*$/);
+});
+
+test('runBiliRound：模型瞎写已评论时，报告按 interactLog 回填', async function () {
+  const env = setup({ runAgent: fakeAgent([
+    {
+      type: 'final',
+      text: [
+        '### BV1gExu6GEjZ',
+        '标题：鲸鱼观察日记',
+        'UP：某UP主',
+        '互动：点赞+投币1枚，已评论：「给你投币啦～」',
+        '',
+        '因无字幕跳过 0 条',
+      ].join('\n'),
+    },
+  ]) });
+
+  const result = await runBiliRound(env.options);
+  assert.equal(result.ok, true);
+  assert.ok(result.report.indexOf('已评论') === -1, '没调用过写工具就不许出现已评论');
+  assert.match(result.report, /互动：无/);
+  assert.match(result.report, /本轮实际互动：无/);
+  assert.deepEqual(result.picked, ['BV1gExu6GEjZ'], 'BV 行对账不受影响');
+});
+
+test('runBiliRound：本轮真的有互动时，报告照实写出', async function () {
+  const env = setup();
+  env.options.runAgent = function () {
+    env.store.recordInteract('likes', { bvid: 'BV1gExu6GEjZ', detail: '点赞：挺好的' });
+    return (async function* () {
+      yield { type: 'final', text: '### BV1gExu6GEjZ\n标题：鲸鱼观察日记\n互动：无\n' };
+    })();
+  };
+
+  const result = await runBiliRound(env.options);
+  assert.equal(result.ok, true);
+  assert.match(result.report, /互动：点赞/);
+  assert.match(result.report, /本轮实际互动：点赞/);
+});
+

@@ -327,6 +327,17 @@ function createBiliStore(options) {
     return entry;
   }
 
+  /** 取某个时间点之后的互动记录：报告对账用，只认真正落库的写操作 */
+  function interactSince(fromMs) {
+    const from = Number(fromMs);
+    const list = state.interactLog || [];
+    if (!Number.isFinite(from)) return list.slice();
+    return list.filter(function (entry) {
+      const t = new Date(entry && entry.at).getTime();
+      return Number.isFinite(t) && t >= from;
+    });
+  }
+
   /** 通知去重：查过的消息 id 记下来，轻量轮只处理新到的 */
   const notifiedFile = path.join(base, 'notified.json');
   let notified = readJson(notifiedFile, {}, function () { return true; });
@@ -416,6 +427,7 @@ function createBiliStore(options) {
     state: stateNow,
     interactBudget: interactBudget,
     recordInteract: recordInteract,
+    interactSince: interactSince,
     interactLog: function (limit) {
       const list = state.interactLog || [];
       const cap = Number(limit) > 0 ? Number(limit) : 20;
