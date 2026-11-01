@@ -93,16 +93,43 @@ function applyInteractionFacts(body, acts) {
   const lines = String(body == null ? '' : body).split('\n');
   const out = [];
   let current = '';
+  let inBlock = false;
+  let hasLine = false;
+
+  /** 块内缺「互动：」行时补上；补在正文末尾，但让过结尾的空行和「因无字幕跳过」 */
+  function patchMissing() {
+    if (!inBlock || hasLine) return;
+    let at = out.length;
+    while (at > 0) {
+      const text = out[at - 1].trim();
+      if (text === '' || text.indexOf('因无字幕跳过') === 0) {
+        at -= 1;
+        continue;
+      }
+      break;
+    }
+    out.splice(at, 0, '互动：' + describeInteractions(byBvid[current] || []));
+    hasLine = true;
+  }
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     const head = ITEM_HEAD.exec(line.trim());
-    if (head) current = head[1].toUpperCase();
-    if (/^\s*互动[:：]/.test(line)) {
+    if (head) {
+      patchMissing();
+      current = head[1].toUpperCase();
+      inBlock = true;
+      hasLine = false;
+    }
+    if (inBlock && /^\s*互动[:：]/.test(line)) {
       out.push('互动：' + describeInteractions(byBvid[current] || []));
+      hasLine = true;
       continue;
     }
     out.push(line);
   }
+  patchMissing();
+
   return out.join('\n').trim() + '\n\n本轮实际互动：' + describeInteractions(rows) + '\n';
 }
 

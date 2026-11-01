@@ -265,3 +265,29 @@ test('runBiliRound：本轮真的有互动时，报告照实写出', async funct
   assert.match(result.report, /本轮实际互动：点赞/);
 });
 
+
+test('applyInteractionFacts：条目里漏写互动行时自动补上，且排在「因无字幕跳过」前', function () {
+  const { applyInteractionFacts } = require('../src/features/bili/runner');
+  const body = [
+    '### BV1gExu6GEjZ',
+    '标题：鲸鱼观察日记',
+    '为什么值得：拍得干净。',
+    '',
+    '### BV1aaaaaaaaa',
+    '标题：第二条',
+    '为什么值得：讲得克制。',
+    '',
+    '因无字幕跳过 3 条',
+  ].join('\n');
+
+  const out = applyInteractionFacts(body, [
+    { at: FIXED.toISOString(), type: 'likes', bvid: 'BV1aaaaaaaaa', detail: '点赞' },
+  ]);
+  const block1 = out.slice(out.indexOf('### BV1gExu6GEjZ'), out.indexOf('### BV1aaaaaaaaa'));
+  const block2 = out.slice(out.indexOf('### BV1aaaaaaaaa'), out.indexOf('因无字幕跳过'));
+  assert.match(block1, /互动：无/, '没互动也要写一行');
+  assert.match(block2, /互动：点赞/, '有互动的条目写实情');
+  assert.ok(out.indexOf('互动：点赞') < out.indexOf('因无字幕跳过'), '互动行在跳过统计之前');
+  assert.match(out, /本轮实际互动：点赞\s*$/);
+});
+
