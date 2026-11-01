@@ -701,7 +701,7 @@ function createBiliModule(options) {
 
         // 主人问「你今天做了什么 / 给谁点赞了」时查真实流水：recallReport 不含点赞投币，容易答不上来
         ctx.addTool({
-          name: 'bili_my_interactions',
+          name: 'plugin_bili_my_interactions', // 主对话工具必须带 plugin_<插件>_ 前缀（src/features.js 强制）
           description:
             '查询小鲸自己在B站的互动流水：点赞、投币、收藏、评论、动态、关注，带时间和对象。' +
             '主人问「你今天做了什么/给谁点赞了/投币了吗/互动了没有」这类问题时必须先调用它，' +
