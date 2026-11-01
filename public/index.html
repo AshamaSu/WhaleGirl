@@ -93,6 +93,23 @@
     border-bottom-right-radius: 6px;
   }
   .msg.user .bubble img { display: block; max-width: 220px; border-radius: 10px; margin-bottom: 6px; }
+  .history-divider {
+    align-self: center;
+    color: #9aa4b2;
+    font-size: 12px;
+    padding: 2px 12px;
+    position: relative;
+  }
+  .history-divider::before,
+  .history-divider::after {
+    content: '';
+    display: inline-block;
+    width: 28px;
+    height: 1px;
+    background: #dfe4ea;
+    vertical-align: middle;
+    margin: 0 8px;
+  }
   .bubble.error {
     background: #fff3f3;
     border-color: #f3c9c9;
@@ -287,6 +304,7 @@
   var controller = null;
   var streaming = false;
   var maxBubbles = 3;
+  var HISTORY_TURNS = 20;
 
   function nearBottom() {
     return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
@@ -460,6 +478,33 @@
     if (!text) return;
     var group = createGroup();
     group.paint(String(text), false);
+  }
+
+  /** 打开页面时用已有记忆把旧对话铺回来：只读 /api/memory，不惊动模型 */
+  function loadHistory() {
+    fetch('/api/memory?sessionId=' + encodeURIComponent(sessionId))
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        var memory = data && data.memory;
+        var turns = memory && Array.isArray(memory.turns) ? memory.turns : [];
+        if (turns.length === 0) return;
+        var recent = turns.slice(-HISTORY_TURNS);
+
+        var divider = document.createElement('div');
+        divider.className = 'history-divider';
+        divider.textContent = '以下是之前聊过的';
+        chatEl.appendChild(divider);
+
+        for (var i = 0; i < recent.length; i += 1) {
+          var turn = recent[i] || {};
+          var text = String(turn.content == null ? '' : turn.content).trim();
+          if (text === '') continue;
+          if (turn.role === 'user') pushUser(text);
+          else pushProactive(text);
+        }
+        scrollToBottom();
+      })
+      .catch(function () {});
   }
 
   function connectEvents() {
@@ -683,6 +728,7 @@
         loadMood();
       }
       connectEvents();
+      loadHistory();
     })
     .catch(function () {
       hintEl.textContent = '连不上服务，确认 node server.js 还在跑';
