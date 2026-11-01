@@ -244,3 +244,28 @@ test('没配 cookie 时 login 为 false，接口层按未登录降级', async fu
     run.handle.stop();
   }
 });
+
+test('interactionsReport：按天数与类型查真实互动流水（含点赞投币）', function () {
+  const { interactionsReport } = require('../src/features/bili');
+  const now = new Date();
+  const store = {
+    interactLog: function () {
+      return [
+        { at: now.toISOString(), type: 'likes', bvid: 'BV1', detail: '点赞：边缘行者' },
+        { at: now.toISOString(), type: 'coins', bvid: 'BV1', detail: '投币1枚：剪得诚心' },
+        { at: new Date(now.getTime() - 3 * 86400000).toISOString(), type: 'replies', bvid: 'BV2', detail: '评论：旧的一条' },
+      ];
+    },
+  };
+
+  const today = interactionsReport(store, {});
+  assert.match(today, /共 2 条/);
+  assert.match(today, /点赞：边缘行者/);
+  assert.match(today, /投币1枚/);
+  assert.doesNotMatch(today, /旧的一条/, '默认只看今天');
+
+  assert.match(interactionsReport(store, { days: 7 }), /共 3 条/);
+  assert.match(interactionsReport(store, { days: 7, type: 'coins' }), /共 1 条/);
+  assert.match(interactionsReport({ interactLog: function () { return []; } }, {}), /没有互动记录/);
+});
+

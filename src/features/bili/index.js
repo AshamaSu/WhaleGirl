@@ -176,6 +176,49 @@ function normalizeInteract(raw) {
  */
 const RECALL_MAX_CHARS = 800;
 
+const INTERACT_TITLES = {
+  likes: '点赞',
+  coins: '投币',
+  favorites: '收藏',
+  replies: '评论',
+  dynamics: '动态',
+  follows: '关注',
+};
+
+/**
+ * 互动流水：点赞/投币/收藏/评论/动态/关注。
+ * recallReport 只覆盖"发出的内容"，点赞和投币不在里面，所以主人问"你给谁点赞了"会答不上来——
+ * 这个工具专治那种情况：以 interactLog 为准，不凭印象。
+ */
+function interactionsReport(store, args) {
+  const days = Number(args && args.days) > 0 ? Math.min(90, Number(args.days)) : 1;
+  const type = String((args && args.type) || 'all');
+  const want = INTERACT_TITLES[type] ? type : '';
+  let log = [];
+  try { log = store.interactLog(200) || []; } catch (err) { log = []; }
+
+  const from = Date.now() - days * 24 * 3600 * 1000;
+  const rows = log.filter(function (entry) {
+    const t = new Date(entry && entry.at).getTime();
+    if (!Number.isFinite(t) || t < from) return false;
+    return want === '' || entry.type === want;
+  });
+
+  const label = want ? INTERACT_TITLES[want] : '互动';
+  if (rows.length === 0) return '最近 ' + days + ' 天没有' + label + '记录。';
+
+  const lines = rows.slice(0, 30).map(function (entry) {
+    const at = new Date(entry.at);
+    const mmdd = String(at.getMonth() + 1).padStart(2, '0') + '-' + String(at.getDate()).padStart(2, '0');
+    const hhmm = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
+    const text = String(entry.detail || '').trim() || (INTERACT_TITLES[entry.type] || entry.type);
+    return '- ' + mmdd + ' ' + hhmm + ' ' + text;
+  });
+  return '最近 ' + days + ' 天' + label + '记录（共 ' + rows.length + ' 条' + (rows.length > 30 ? '，取最近 30 条' : '') + '）：\n' +
+    lines.join('\n') +
+    '\n（这些是接口调用成功的记录；评论可能进平台审核，公开看不到不等于没发。）';
+}
+
 function recallReport(store, args) {
   const topic = String((args && args.topic) || 'summary');
   const keyword = String((args && args.keyword) || '').trim();
@@ -655,6 +698,30 @@ function createBiliModule(options) {
             return recallReport(store, args || {});
           },
         });
+
+        // 主人问「你今天做了什么 / 给谁点赞了」时查真实流水：recallReport 不含点赞投币，容易答不上来
+        ctx.addTool({
+          name: 'bili_my_interactions',
+          description:
+            '查询小鲸自己在B站的互动流水：点赞、投币、收藏、评论、动态、关注，带时间和对象。' +
+            '主人问「你今天做了什么/给谁点赞了/投币了吗/互动了没有」这类问题时必须先调用它，' +
+            '以返回的记录为准；查不到就直说没有，不要凭印象编造。',
+          parameters: {
+            type: 'object',
+            properties: {
+              days: { type: 'number', description: '可选：查最近几天，默认 1（今天）' },
+              type: {
+                type: 'string',
+                enum: ['all', 'likes', 'coins', 'favorites', 'replies', 'dynamics', 'follows'],
+                description: '可选：只看某一类互动，默认 all',
+              },
+            },
+            required: [],
+          },
+          execute: async function (args) {
+            return interactionsReport(store, args || {});
+          },
+        });
       }
 
       timer = setInterval(tick, TICK_MS);
@@ -690,6 +757,7 @@ function createBiliModule(options) {
 module.exports = {
   createBiliModule: createBiliModule,
   recallReport: recallReport,
+  interactionsReport: interactionsReport,
   normalizeSection: normalizeSection,
   normalizeInteract: normalizeInteract,
   historyPrompt: historyPrompt,
